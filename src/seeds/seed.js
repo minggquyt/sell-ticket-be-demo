@@ -1,54 +1,77 @@
 require('dotenv').config();
 const pool = require('../config/db');
+const bcrypt = require('bcryptjs');
 
-async function seedData() {
+async function seed() {
   const client = await pool.connect();
   try {
-    console.log('⏳ Đang xóa dữ liệu cũ và nạp dữ liệu mẫu...');
+    console.log('--- Bắt đầu quy trình Seed MVP ---');
     await client.query('BEGIN');
 
-    // 1. Reset dữ liệu cũ
     await client.query('TRUNCATE TABLE order_items, orders, seats, events, users CASCADE;');
 
-    // 2. Tạo User
-    const userRes = await client.query(`
-      INSERT INTO users (id, email, full_name, password)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, full_name;
-    `, ['11111111-1111-1111-1111-111111111111', 'customer@demo.com', 'Nguyen Van A', 'hashed_pass']);
+    // 1. Tạo tài khoản Admin (admin@gmail.com / admin)
+    const adminHashedPass = await bcrypt.hash('admin', 10);
+    const adminId = '00000000-0000-0000-0000-000000000000';
+    await client.query(`
+      INSERT INTO users (id, email, full_name, password, role)
+      VALUES ($1, 'admin@gmail.com', 'System Administrator', $2, 'ADMIN');
+    `, [adminId, adminHashedPass]);
 
-    // 3. Tạo Event
-    const eventRes = await client.query(`
-      INSERT INTO events (id, title, description, location, start_time)
-      VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days')
-      RETURNING id, title;
-    `, ['22222222-2222-2222-2222-222222222222', 'Live Concert 2026', 'Đêm nhạc hội trực tiếp', 'TP. Hồ Chí Minh']);
+    // 2. Tạo tài khoản Khách mẫu (user@gmail.com / 123456)
+    const userHashedPass = await bcrypt.hash('123456', 10);
+    const userId = '11111111-1111-1111-1111-111111111111';
+    await client.query(`
+      INSERT INTO users (id, email, full_name, password, role)
+      VALUES ($1, 'user@gmail.com', 'Khách Hàng Mẫu', $2, 'CUSTOMER');
+    `, [userId, userHashedPass]);
 
-    // 4. Tạo Ghế
-    const seats = [
-      { seat: 'A1', price: 500000 }, { seat: 'A2', price: 500000 }, { seat: 'A3', price: 500000 }, { seat: 'A4', price: 500000 },
-      { seat: 'B1', price: 300000 }, { seat: 'B2', price: 300000 }, { seat: 'B3', price: 300000 }, { seat: 'B4', price: 300000 },
-      { seat: 'C1', price: 200000 }, { seat: 'C2', price: 200000 }, { seat: 'C3', price: 200000 }, { seat: 'C4', price: 200000 }
-    ];
+    // 3. Sự kiện 1: Seat-based (Tạo 30 ghế từ A1 -> A30)
+    const event1Id = '22222222-2222-2222-2222-222222222221';
+    await client.query(`
+      INSERT INTO events (id, title, description, location, start_time, event_type)
+      VALUES ($1, 'Live Concert: Đêm Nhạc Mùa Thu', 'Sự kiện âm nhạc acoustic chọn ghế trực tiếp', 'Nhà hát Hòa Bình, TP.HCM', NOW() + INTERVAL '7 days', 'SEAT_BASED');
+    `, [event1Id]);
 
-    for (const item of seats) {
+    for (let i = 1; i <= 12; i++) {
       await client.query(`
-        INSERT INTO seats (event_id, seat_number, price, status)
-        VALUES ($1, $2, $3, 'AVAILABLE');
-      `, [eventRes.rows[0].id, item.seat, item.price]);
+        INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+        VALUES ($1, $2, 'STANDARD', 300000, 'AVAILABLE');
+      `, [event1Id, `A${i}`]);
+    }
+
+    // 4. Sự kiện 2: Zone-based
+    const event2Id = '22222222-2222-2222-2222-222222222222';
+    await client.query(`
+      INSERT INTO events (id, title, description, location, start_time, event_type)
+      VALUES ($1, 'EDM Festival 2026: Soundwave Arena', 'Đại nhạc hội ngoài trời theo phân vùng', 'Sân vận động Quân Khu 7', NOW() + INTERVAL '14 days', 'ZONE_BASED');
+    `, [event2Id]);
+
+    for (let i = 1; i <= 10; i++) {
+      await client.query(`
+        INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+        VALUES ($1, $2, 'VIP', 750000, 'AVAILABLE');
+      `, [event2Id, `VIP-${String(i).padStart(2, '0')}`]);
+    }
+    for (let i = 1; i <= 20; i++) {
+      await client.query(`
+        INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+        VALUES ($1, $2, 'REGULAR', 400000, 'AVAILABLE');
+      `, [event2Id, `REG-${String(i).padStart(2, '0')}`]);
     }
 
     await client.query('COMMIT');
-    console.log('✅ Nạp dữ liệu mẫu thành công!');
-    console.log(`- User ID: ${userRes.rows[0].id}`);
-    console.log(`- Event ID: ${eventRes.rows[0].id}`);
-  } catch (error) {
+    console.log('✅ Seed hoàn tất!');
+    console.log('-> Admin: admin@gmail.com / admin');
+    console.log('-> Khách: user@gmail.com / 123456');
+    console.log('-> Đã tạo 12 ghế (A1 -> A12) cho Event Seat-based');
+  } catch (err) {
     await client.query('ROLLBACK');
-    console.error('❌ Lỗi nạp dữ liệu:', error.message);
+    console.error('❌ Lỗi Seed:', err.message);
   } finally {
     client.release();
     pool.end();
   }
 }
 
-seedData();
+seed();

@@ -7,15 +7,11 @@ const indexRoutes = require('./src/routes/index.route');
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// Phục vụ thư mục public chứa file giao diện HTML/JS
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Gắn routes API
 app.use('/api', indexRoutes);
 
-app.get("/", async (erq,res) => {
-  res.send("Hello")
+app.get("/", async (erq, res) => {
+  res.send("Welcome to homepage")
 })
 
 // Background Job: Quét ghế hết hạn định kỳ mỗi 60 giây
