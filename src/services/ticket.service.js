@@ -32,6 +32,179 @@ async function getUserOrderHistory(userId) {
   return res.rows;
 }
 
+// function check user còn phiên giữ ghế nào hay không
+async function checkActiveHold(client, userId) {
+  const result = await client.query(
+    `
+    SELECT 1 FROM seats 
+    WHERE reserved_by = $1 
+      AND status IN ('RESERVED', 'PAYMENT_PROCESSING') 
+      AND reserved_until > NOW()
+    LIMIT 1;
+    `,
+    [userId]
+  );
+  return result.rows.length > 0;
+}
+
+async function requestSeatHold(userId, requestedSeatIds) {
+  const client = await pool.connect();
+
+  try {
+    // 1. Kiểm tra Active Hold trước khi mở Transaction
+    const hasActiveHold = await checkActiveHold(client, userId);
+    if (hasActiveHold) {
+      return {
+        success: false,
+        code: 'USER_HAS_ACTIVE_HOLD',
+        message: 'Bạn đang có một phiên giữ vé chưa hoàn tất.',
+      };
+    }
+
+    await client.query('BEGIN');
+
+    // 2. Thử Lock các ghế khả dụng trong mảng truyền vào (Chạy cực nhanh < 5ms)
+    const lockedSeatsResult = await client.query(
+      `
+      SELECT id, seat_number, price, zone_name
+      FROM seats
+      WHERE id = ANY($1::uuid[])
+        AND status = 'AVAILABLE'
+      ORDER BY id ASC
+      FOR UPDATE SKIP LOCKED;
+      `,
+      [requestedSeatIds]
+    );
+
+    const availableSeats = lockedSeatsResult.rows;
+    const availableIds = availableSeats.map((s) => s.id);
+
+    // TRƯỜNG HỢP A: Không có ghế nào còn trống
+    if (availableSeats.length === 0) {
+      await client.query('ROLLBACK');
+      return {
+        success: false,
+        code: 'ALL_SEATS_TAKEN',
+        message: 'Tất cả các ghế bạn chọn đều đã bị người khác giữ.',
+      };
+    }
+
+    // TRƯỜNG HỢP B: Đủ 100% số ghế yêu cầu -> UPDATE & COMMIT NGAY
+    if (availableSeats.length === requestedSeatIds.length) {
+      const holdDurationSeconds = 30; // Giữ 30s
+      const reservedUntil = new Date(Date.now() + holdDurationSeconds * 1000);
+
+      const updateResult = await client.query(
+        `
+        UPDATE seats 
+        SET status = 'RESERVED', reserved_by = $1, reserved_until = $2
+        WHERE id = ANY($3::uuid[])
+        RETURNING id, seat_number, status, reserved_until;
+        `,
+        [userId, reservedUntil, availableIds]
+      );
+
+      await client.query('COMMIT');
+
+      return {
+        success: true,
+        code: 'FULLY_RESERVED',
+        reservedSeats: updateResult.rows,
+        reservedUntil,
+      };
+    }
+
+    // TRƯỜNG HỢP C: Khóa được MỘT PHẦN (Ví dụ 2/3 ghế)
+    // CRITICAL: ROLLBACK NGAY ĐỂ NHẢ CONNECTION POOL VỀ DB!
+    await client.query('ROLLBACK');
+
+    // Lấy ra danh sách các ghế đã bị người khác chọn để báo cho UI
+    const unavailableSeatIds = requestedSeatIds.filter(
+      (id) => !availableIds.includes(id)
+    );
+    const unavailableSeatsResult = await pool.query(
+      `SELECT seat_number FROM seats WHERE id = ANY($1::uuid[])`,
+      [unavailableSeatIds]
+    );
+
+    return {
+      success: false,
+      code: 'PARTIAL_AVAILABILITY',
+      message: 'Một số ghế bạn chọn vừa có người khác giữ.',
+      unavailableSeats: unavailableSeatsResult.rows.map((s) => s.seat_number),
+      availableSeats: availableSeats.map((s) => ({
+        id: s.id,
+        seat_number: s.seat_number,
+      })),
+      // Trả về danh sách ID khả dụng để FE dùng gửi lại ở Phase 2
+      availableSeatIds: availableIds,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release(); // Luôn giải phóng Connection
+  }
+}
+
+async function confirmPartialHold(userId, confirmSeatIds) {
+  const client = await pool.connect();
+
+  try {
+    // 1. Kiểm tra Active Hold
+    const hasActiveHold = await checkActiveHold(client, userId);
+    if (hasActiveHold) {
+      return {
+        success: false,
+        code: 'USER_HAS_ACTIVE_HOLD',
+        message: 'Bạn đang có một phiên giữ vé chưa hoàn tất.',
+      };
+    }
+
+    await client.query('BEGIN');
+
+    const holdDurationSeconds = 30;
+    const reservedUntil = new Date(Date.now() + holdDurationSeconds * 1000);
+
+    // 2. Thử UPDATE chính thức các ghế này NẾU chúng vẫn còn status = 'AVAILABLE'
+    const updateResult = await client.query(
+      `
+      UPDATE seats
+      SET status = 'RESERVED', reserved_by = $1, reserved_until = $2
+      WHERE id = ANY($3::uuid[])
+        AND status = 'AVAILABLE'
+      RETURNING id, seat_number, status, reserved_until;
+      `,
+      [userId, reservedUntil, confirmSeatIds]
+    );
+
+    // 3. Kiểm tra xem có ghế nào bị User khác "cướp" mất trong thời gian User hiện tại suy nghĩ không
+    if (updateResult.rows.length !== confirmSeatIds.length) {
+      // Nếu không đủ số lượng -> Rollback hủy toàn bộ lượt chọn này
+      await client.query('ROLLBACK');
+      return {
+        success: false,
+        code: 'PARTIAL_HOLD_EXPIRED',
+        message: 'Rất tiếc! Trong lúc bạn suy nghĩ, các ghế còn lại cũng đã được người khác giữ mất.',
+      };
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      success: true,
+      code: 'PARTIAL_RESERVED_SUCCESS',
+      reservedSeats: updateResult.rows,
+      reservedUntil,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Lấy danh sách sự kiện
 async function getAllEvents() {
   const res = await pool.query('SELECT * FROM events ORDER BY created_at DESC;');
@@ -69,64 +242,6 @@ async function getZonesByEvent(eventId) {
   return res.rows;
 }
 
-// Giữ ghế Seat-based
-// async function reserveSeats(userId, seatIds) {
-//   if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
-//     throw new Error('Danh sách ghế chọn không hợp lệ.');
-//   }
-
-//   const now = new Date();
-//   const until = new Date(Date.now() + 30 * 1000);
-
-//   const query = `
-//     WITH user_active_hold AS (
-//       SELECT 1 FROM seats 
-//       WHERE reserved_by = $1 
-//         AND status IN ('RESERVED', 'PAYMENT_PROCESSING') 
-//         AND reserved_until > $2
-//       LIMIT 1
-//     ),
-//     locked_available_seats AS (
-//       SELECT id, seat_number 
-//       FROM seats 
-//       WHERE id = ANY($3::uuid[])
-//         AND status NOT IN ('SOLD')
-//         AND NOT ((status IN ('RESERVED', 'PAYMENT_PROCESSING')) AND reserved_until > $2)
-//         AND NOT EXISTS (SELECT 1 FROM user_active_hold)
-//       ORDER BY id ASC
-//       FOR UPDATE NOWAIT
-//     )
-//     UPDATE seats 
-//     SET status = 'RESERVED', reserved_by = $1, reserved_until = $4
-//     WHERE id IN (SELECT id FROM locked_available_seats)
-//       AND (SELECT COUNT(*) FROM locked_available_seats) = $5
-//     RETURNING id, seat_number, status, reserved_until;
-//   `;
-
-//   try {
-//     // DÙNG TRỰC TIẾP pool.query: CHỈ TỐN 1 ROUND-TRIP MẠNG DUY NHẤT
-//     const result = await pool.query(query, [
-//       userId, 
-//       now, 
-//       seatIds, 
-//       until, 
-//       seatIds.length
-//     ]);
-
-//     if (result.rows.length !== seatIds.length) {
-//       throw new Error('Một hoặc nhiều ghế bạn chọn hiện không còn khả dụng.');
-//     }
-
-//     return { seats: result.rows, reserved_until: until };
-//   } catch (err) {
-//     if (err.code === '55P03') {
-//       const lockErr = new Error('Ghế bạn chọn đang có người khác thao tác giữ chỗ. Vui lòng chọn ghế khác!');
-//       lockErr.statusCode = 409;
-//       throw lockErr;
-//     }
-//     throw err;
-//   }
-// }
 // Khai báo Map lưu vết các ghế đang tạm giữ trong RAM Node.js: seatId -> expiredAt (timestamp)
 const localReservedSeats = new Map();
 
@@ -141,80 +256,6 @@ setInterval(() => {
 }, 10 * 1000);
 
 // Giữ ghế Seat-based tối ưu hiệu năng cao
-async function reserveSeats(userId, seatIds) {
-  if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
-    const badReqErr = new Error('Danh sách ghế chọn không hợp lệ.');
-    badReqErr.statusCode = 400;
-    throw badReqErr;
-  }
-
-  const currentTimestamp = Date.now();
-
-  // BƯỚC 1: EARLY EXIT - Kiểm tra nhanh trên RAM Node.js (tốn ~0.01ms)
-  // Nếu có bất kỳ ghế nào vừa được giữ thành công và còn hạn, từ chối ngay lập tức!
-  for (const seatId of seatIds) {
-    const expiredAt = localReservedSeats.get(seatId);
-    if (expiredAt && expiredAt > currentTimestamp) {
-      const conflictErr = new Error('Một hoặc nhiều ghế bạn chọn vừa có người khác giữ chỗ. Vui lòng chọn ghế khác!');
-      conflictErr.statusCode = 409;
-      throw conflictErr;
-    }
-  }
-
-  const now = new Date(currentTimestamp);
-  const until = new Date(currentTimestamp + 30 * 1000); // Giữ trong 30 giây
-
-  // BƯỚC 2: SQL QUERY SỬ DỤNG SKIP LOCKED (Không rollback, không lỗi 55P03)
-  const query = `
-    WITH user_active_hold AS (
-      SELECT 1 FROM seats 
-      WHERE reserved_by = $1 
-        AND status IN ('RESERVED', 'PAYMENT_PROCESSING') 
-        AND reserved_until > $2
-      LIMIT 1
-    ),
-    locked_available_seats AS (
-      SELECT id, seat_number 
-      FROM seats 
-      WHERE id = ANY($3::uuid[])
-        AND status = 'AVAILABLE'
-        AND NOT ((status IN ('RESERVED', 'PAYMENT_PROCESSING')) AND reserved_until > $2)
-        AND NOT EXISTS (SELECT 1 FROM user_active_hold)
-      ORDER BY id ASC
-      FOR UPDATE SKIP LOCKED
-    )
-    UPDATE seats 
-    SET status = 'RESERVED', reserved_by = $1, reserved_until = $4
-    WHERE id IN (SELECT id FROM locked_available_seats)
-      AND (SELECT COUNT(*) FROM locked_available_seats) = $5
-    RETURNING id, seat_number, status, reserved_until;
-  `;
-
-  // BƯỚC 3: Gửi 1 round-trip duy nhất xuống DB
-  const result = await pool.query(query, [
-    userId, 
-    now, 
-    seatIds, 
-    until, 
-    seatIds.length
-  ]);
-
-  // BƯỚC 4: Kiểm tra kết quả
-  // Nếu không đủ số ghế yêu cầu (do ghế bị skip locked hoặc user đang có phiên giữ chỗ khác)
-  if (result.rows.length !== seatIds.length) {
-    const unavailableErr = new Error('Một hoặc nhiều ghế bạn chọn hiện không còn khả dụng.');
-    unavailableErr.statusCode = 409;
-    throw unavailableErr;
-  }
-
-  // BƯỚC 5: Ghi nhận ngay các ghế vừa giữ thành công vào RAM để chặn các user tiếp theo
-  const expireTimeMs = until.getTime();
-  for (const row of result.rows) {
-    localReservedSeats.set(row.id, expireTimeMs);
-  }
-
-  return { seats: result.rows, reserved_until: until };
-}
 
 // Giữ ghế Zone-based
 async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
@@ -237,51 +278,51 @@ async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
   const until = new Date(Date.now() + 30 * 1000); // 30s giữ ghế
 
   const query = `
-    WITH user_active_hold AS (
-      -- 1. Chặn nếu user đang có phiên giữ vé còn hiệu lực
-      SELECT 1 FROM seats 
-      WHERE reserved_by = $1 
-        AND status IN ('RESERVED', 'PAYMENT_PROCESSING') 
-        AND reserved_until > $2
-      LIMIT 1
-    ),
-    zone_demands AS (
-      -- 2. Parse danh sách yêu cầu từ JSON vào bảng tạm: zone_name, required_qty
-      SELECT "zoneName" AS zone_name, quantity::int AS required_qty 
-      FROM jsonb_to_recordset($3::jsonb) AS x("zoneName" text, quantity int)
-    ),
-    locked_seats AS (
-      -- 3. Quét và khóa đúng số lượng vé AVAILABLE cho từng zone bằng SKIP LOCKED
-      SELECT s.id, s.seat_number, s.zone_name, s.price
-      FROM zone_demands zd
-      CROSS JOIN LATERAL (
-        SELECT id, seat_number, zone_name, price
-        FROM seats
-        WHERE event_id = $4
-          AND zone_name = zd.zone_name
-          AND status = 'AVAILABLE'
-          AND NOT EXISTS (SELECT 1 FROM user_active_hold)
-        ORDER BY seat_number ASC
-        LIMIT zd.required_qty
-        FOR UPDATE SKIP LOCKED
-      ) s
-    ),
-    checked_availability AS (
-      -- 4. Kiểm tra xem từng zone có đủ số vé yêu cầu hay không
-      SELECT zd.zone_name, zd.required_qty, COUNT(ls.id) AS locked_qty
-      FROM zone_demands zd
-      LEFT JOIN locked_seats ls ON zd.zone_name = ls.zone_name
-      GROUP BY zd.zone_name, zd.required_qty
+  WITH user_active_hold AS (
+    -- 1. Chặn ngay nếu user đang có phiên giữ vé còn hiệu lực
+    SELECT 1 FROM seats 
+    WHERE reserved_by = $1 
+      AND status IN ('RESERVED', 'PAYMENT_PROCESSING') 
+      AND reserved_until > $2
+    LIMIT 1
+  ),
+  zone_demands AS (
+    -- 2. Parse JSON và lọc luôn nếu user đang active hold
+    SELECT "zoneName" AS zone_name, quantity::int AS required_qty 
+    FROM jsonb_to_recordset($3::jsonb) AS x("zoneName" text, quantity int)
+    WHERE NOT EXISTS (SELECT 1 FROM user_active_hold)
+  ),
+  locked_seats AS (
+    -- 3. Quét B-Tree Index cực nhanh với SKIP LOCKED
+    SELECT s.id, s.seat_number, s.zone_name, s.price
+    FROM zone_demands zd
+    CROSS JOIN LATERAL (
+      SELECT id, seat_number, zone_name, price
+      FROM seats
+      WHERE event_id = $4
+        AND zone_name = zd.zone_name
+        AND status = 'AVAILABLE'
+      ORDER BY seat_number ASC
+      LIMIT zd.required_qty
+      FOR UPDATE SKIP LOCKED
+    ) s
+  ),
+  checked_availability AS (
+    -- 4. Kiểm tra xem từng zone có đủ 100% số vé yêu cầu hay không
+    SELECT zd.zone_name, zd.required_qty, COUNT(ls.id) AS locked_qty
+    FROM zone_demands zd
+    LEFT JOIN locked_seats ls ON zd.zone_name = ls.zone_name
+    GROUP BY zd.zone_name, zd.required_qty
+  )
+  -- 5. Chỉ UPDATE nếu không có zone nào bị thiếu vé
+  UPDATE seats
+  SET status = 'RESERVED', reserved_by = $1, reserved_until = $5
+  WHERE id IN (SELECT id FROM locked_seats)
+    AND NOT EXISTS (
+      SELECT 1 FROM checked_availability WHERE locked_qty < required_qty
     )
-    -- 5. Chỉ UPDATE nếu toàn bộ các zone đều đáp ứng đủ 100% số vé yêu cầu
-    UPDATE seats
-    SET status = 'RESERVED', reserved_by = $1, reserved_until = $5
-    WHERE id IN (SELECT id FROM locked_seats)
-      AND NOT EXISTS (
-        SELECT 1 FROM checked_availability WHERE locked_qty < required_qty
-      )
-    RETURNING id, seat_number, zone_name, price, status, reserved_until;
-  `;
+  RETURNING id, seat_number, zone_name, price, status, reserved_until;
+`;
 
   try {
     // 1 lần trao đổi mạng duy nhất (1 Round-trip)
@@ -309,78 +350,6 @@ async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
   }
 }
 
-
-// // Hủy giữ ghế
-// async function releaseReservedSeats(userId, seatIds) {
-//   const client = await pool.connect();
-//   try {
-//     await client.query('BEGIN');
-
-//     // Chỉ giải phóng những ghế đang được giữ bởi chính user này và chưa bị bán
-//     const result = await client.query(`
-//       UPDATE seats 
-//       SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL
-//       WHERE id = ANY($1::uuid[]) 
-//         AND reserved_by = $2 
-//         AND status = 'RESERVED'
-//       RETURNING id, seat_number;
-//     `, [seatIds, userId]);
-
-//     await client.query('COMMIT');
-//     return result.rows;
-//   } catch (err) {
-//     await client.query('ROLLBACK');
-//     throw err;
-//   } finally {
-//     client.release();
-//   }
-// }
-
-// // Khởi tạo thanh toán
-// async function startCheckoutSeats(userId, seatIds) {
-//   const client = await pool.connect();
-//   try {
-//     await client.query('BEGIN');
-//     // THỰC HIỆN KHÓA DÒNG CỦA CÁC GHẾ ĐƯỢC THANH TOÁN.
-//     const seatRes = await client.query(`SELECT * FROM seats WHERE id = ANY($1::uuid[]) ORDER BY id ASC FOR UPDATE;`, [seatIds]);
-
-//     const now = new Date();
-//     let total = 0;
-//     for (const seat of seatRes.rows) {
-//       if (seat.status !== 'RESERVED' || seat.reserved_by !== userId || new Date(seat.reserved_until) <= now) {
-//         throw new Error(`Ghế ${seat.seat_number} đã quá thời hạn 5 phút.`);
-//       }
-//       total += Number(seat.price);
-//     }
-
-//     const paymentTimeout = new Date(Date.now() + 1 * 60 * 1000); // thời gian chờ (1 phút)
-//     const orderRes = await client.query(`
-//       INSERT INTO orders (user_id, total_amount, status, expires_at) 
-//       VALUES ($1, $2, 'PAYMENT_PROCESSING', $3) 
-//       RETURNING *;
-//     `, [userId, total, paymentTimeout]);
-//     const order = orderRes.rows[0];
-
-//     for (const s of seatRes.rows) {
-//       await client.query(`INSERT INTO order_items (order_id, seat_id, price) VALUES ($1, $2, $3);`, [order.id, s.id, s.price]);
-//     }
-
-
-//     await client.query(`
-//       UPDATE seats 
-//       SET status = 'PAYMENT_PROCESSING', reserved_until = $1, current_order_id = $2 
-//       WHERE id = ANY($3::uuid[]);
-//     `, [paymentTimeout, order.id, seatIds]); // thêm thời gian chờ thanh toán
-
-//     await client.query('COMMIT');
-//     return { orderId: order.id, totalAmount: total, paymentTimeout: paymentTimeout };
-//   } catch (err) {
-//     await client.query('ROLLBACK');
-//     throw err;
-//   } finally {
-//     client.release();
-//   }
-// }
 
 // Hủy giữ ghế
 async function releaseReservedSeats(userId, seatIds) {
@@ -422,7 +391,7 @@ async function startCheckoutSeats(userId, seatIds) {
 
     // Khóa dòng của các ghế được thanh toán
     const seatRes = await client.query(
-      `SELECT * FROM seats WHERE id = ANY($1::uuid[]) ORDER BY id ASC FOR UPDATE;`, 
+      `SELECT * FROM seats WHERE id = ANY($1::uuid[]) ORDER BY id ASC FOR UPDATE;`,
       [seatIds]
     );
 
@@ -445,7 +414,7 @@ async function startCheckoutSeats(userId, seatIds) {
 
     for (const s of seatRes.rows) {
       await client.query(
-        `INSERT INTO order_items (order_id, seat_id, price) VALUES ($1, $2, $3);`, 
+        `INSERT INTO order_items (order_id, seat_id, price) VALUES ($1, $2, $3);`,
         [order.id, s.id, s.price]
       );
     }
@@ -474,44 +443,12 @@ async function startCheckoutSeats(userId, seatIds) {
 }
 
 // Webhook xử lý thanh toán
-// async function handlePaymentWebhook(orderId, isSuccess) {
-//   const client = await pool.connect();
-//   try {
-//     await client.query('BEGIN');
-//     const orderRes = await client.query(`SELECT * FROM orders WHERE id = $1 FOR UPDATE;`, [orderId]);
-//     if (orderRes.rows.length === 0) throw new Error('Không tìm thấy đơn hàng.');
-
-//     if (isSuccess) {
-//       await client.query(`UPDATE orders SET status = 'SUCCESS' WHERE id = $1;`, [orderId]);
-//       await client.query(`
-//         UPDATE seats 
-//         SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
-//         WHERE current_order_id = $1;
-//       `, [orderId]);
-//     } else {
-//       await client.query(`UPDATE orders SET status = 'FAILED' WHERE id = $1;`, [orderId]);
-//       await client.query(`
-//         UPDATE seats 
-//         SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
-//         WHERE current_order_id = $1;
-//       `, [orderId]);
-//     }
-
-//     await client.query('COMMIT');
-//     return { status: isSuccess ? 'SUCCESS' : 'FAILED' };
-//   } catch (err) {
-//     await client.query('ROLLBACK');
-//     throw err;
-//   } finally {
-//     client.release();
-//   }
-// }
 async function handlePaymentWebhook(orderId, isSuccess) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const orderRes = await client.query(
-      `SELECT * FROM orders WHERE id = $1 FOR UPDATE;`, 
+      `SELECT * FROM orders WHERE id = $1 FOR UPDATE;`,
       [orderId]
     );
     if (orderRes.rows.length === 0) throw new Error('Không tìm thấy đơn hàng.');
@@ -520,7 +457,7 @@ async function handlePaymentWebhook(orderId, isSuccess) {
 
     if (isSuccess) {
       await client.query(`UPDATE orders SET status = 'SUCCESS' WHERE id = $1;`, [orderId]);
-      
+
       // Cập nhật ghế thành SOLD và trả về danh sách ID ghế vừa cập nhật
       const seatRes = await client.query(`
         UPDATE seats 
@@ -531,7 +468,7 @@ async function handlePaymentWebhook(orderId, isSuccess) {
       updatedSeats = seatRes.rows;
     } else {
       await client.query(`UPDATE orders SET status = 'FAILED' WHERE id = $1;`, [orderId]);
-      
+
       // Trả ghế về AVAILABLE và lấy danh sách ID ghế để xóa khỏi bộ nhớ đệm
       const seatRes = await client.query(`
         UPDATE seats 
@@ -627,9 +564,10 @@ module.exports = {
   getAllEvents,
   getSeatsByEvent,
   getZonesByEvent,
-  reserveSeats,
   reserveSeatsByMultipleZones,
   startCheckoutSeats,
   handlePaymentWebhook,
-  releaseReservedSeats
+  releaseReservedSeats,
+  confirmPartialHold,
+  requestSeatHold
 };

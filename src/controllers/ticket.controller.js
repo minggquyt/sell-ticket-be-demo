@@ -10,6 +10,49 @@ exports.getEvents = async (req, res) => {
   }
 };
 
+exports.confirmPartialHold = async (req, res) => {
+  try {
+    const { confirmSeatIds } = req.body;
+
+    // Validate danh sách ghế gửi lên
+    if (!confirmSeatIds || !Array.isArray(confirmSeatIds) || confirmSeatIds.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Danh sách confirmSeatIds không hợp lệ.' 
+      });
+    }
+
+    // Gọi Service xử lý
+    const result = await ticketService.confirmPartialHold(req.user.id, confirmSeatIds);
+
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        code: result.code,
+        message: 'Đã xác nhận giữ các ghế còn lại thành công.',
+        data: {
+          seatIds: result.reservedSeats.map(s => s.id),
+          reserved_until: result.reservedUntil,
+          seats: result.reservedSeats
+        }
+      });
+    }
+
+    // Lỗi khi bị cướp ghế hoặc hết hạn trong lúc suy nghĩ
+    return res.status(400).json({
+      success: false,
+      code: result.code,
+      message: result.message
+    });
+
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Lỗi hệ thống khi xác nhận giữ chỗ.' 
+    });
+  }
+};
+
 exports.getEventDetails = async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -26,32 +69,73 @@ exports.getEventDetails = async (req, res) => {
   }
 };
 
+
 const MAX_TICKETS = 4;
 
-exports.reserveSeats = async (req, res) => {
+exports.requestSeatHold = async (req, res) => {
   try {
     const { seatIds } = req.body;
-
+    
+    // Validate danh sách ghế gửi lên
     if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'Danh sách ghế không hợp lệ.' });
-    }
-
-    // Chặn nếu chọn quá số vé cho phép
-    if (seatIds.length > MAX_TICKETS) {
       return res.status(400).json({ 
         success: false, 
-        message: `Mỗi lượt đặt chỉ được chọn tối đa ${MAX_TICKETS} vé.` 
+        message: 'Danh sách seatIds không hợp lệ.' 
       });
     }
 
-    const result = await ticketService.reserveSeats(req.user.id, req.body.seatIds);
-    res.json({ success: true, message: 'Đã giữ ghế thành công!', data: result });
+    if (seatIds.length > MAX_TICKETS) {
+      return {
+        success: false,
+        code: 'EXCEEDED_MAX_SEATS',
+        message: `Bạn chỉ được chọn tối đa ${MAX_SEATS_PER_USER} ghế cho mỗi tài khoản.`,
+      };
+    }
+
+    // Gọi Service xử lý
+    const result = await ticketService.requestSeatHold(req.user.id, seatIds);
+
+    // Trường hợp 1: Giữ thành công 100% số ghế
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        code: result.code,
+        message: 'Đã giữ chỗ thành công.',
+        data: {
+          seatIds: result.reservedSeats.map(s => s.id),
+          reserved_until: result.reservedUntil,
+          seats: result.reservedSeats
+        }
+      });
+    }
+
+    // Trường hợp 2: Chỉ khả dụng một phần (PARTIAL_AVAILABILITY)
+    if (result.code === 'PARTIAL_AVAILABILITY') {
+      return res.status(200).json({
+        success: false,
+        code: result.code,
+        message: result.message,
+        unavailableSeats: result.unavailableSeats,
+        availableSeats: result.availableSeats,
+        availableSeatIds: result.availableSeatIds
+      });
+    }
+
+    // Trường hợp 3: Bị lỗi nghiệp vụ khác (VD: User đang có hold active, hoặc tất cả ghế đã bị đặt)
+    return res.status(400).json({
+      success: false,
+      code: result.code,
+      message: result.message
+    });
+
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    return res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Lỗi hệ thống khi giữ chỗ.' 
+    });
   }
 };
 
-// src/controllers/ticket.controller.js
 
 exports.reserveZone = async (req, res) => {
   try {
@@ -69,7 +153,6 @@ exports.reserveZone = async (req, res) => {
     }
 
     // Kiểm tra giới hạn MAX_TICKETS 
-    const MAX_TICKETS = 4; 
     if (totalRequested > MAX_TICKETS) {
       return res.status(400).json({ 
         success: false, 
