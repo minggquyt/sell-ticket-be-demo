@@ -45,6 +45,38 @@ app.get("/api/payos-webhook", (req, res) => {
   res.json({ success: true, message: "PayOS Webhook endpoint is active and running!" });
 });
 
+// Endpoint Server-Sent Events (SSE) để stream logs trực tiếp
+app.get("/api/logs/stream", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+
+  // Gửi danh sách logs gần nhất cho client vừa kết nối
+  const recent = logger.getRecentLogs();
+  res.write(`data: ${JSON.stringify({ type: "INIT", logs: recent })}\n\n`);
+
+  // Thêm client vào danh sách lắng nghe
+  logger.addSSEClient(res);
+
+  // Heartbeat ping mỗi 15s để giữ kết nối không bị timeout bởi proxy / Cloudflare
+  const keepAlive = setInterval(() => {
+    res.write(": heartbeat\n\n");
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    logger.removeSSEClient(res);
+  });
+});
+
+// Trang web xem Live Log thời gian thực
+app.get("/logs", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "logs.html"));
+});
+
 // Background Job: Quét ghế hết hạn định kỳ mỗi 60 giây
 setInterval(async () => {
   try {
