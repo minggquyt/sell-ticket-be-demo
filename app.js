@@ -3,6 +3,7 @@ const path = require("path");
 const cors = require("cors");
 const pool = require("./src/config/db");
 const indexRoutes = require("./src/routes/index.route");
+const ticketController = require("./src/controllers/ticket.controller");
 const logger = require("./src/utils/logger");
 
 const app = express();
@@ -35,6 +36,13 @@ app.use("/api", indexRoutes);
 
 app.get("/", async (req, res) => {
   res.send("Welcome to homepage");
+});
+
+// Hỗ trợ dự phòng nếu PayOS gửi ping vào root domain hoặc đường dẫn ngắn
+app.post("/", ticketController.payosWebhook);
+app.post("/payos-webhook", ticketController.payosWebhook);
+app.get("/api/payos-webhook", (req, res) => {
+  res.json({ success: true, message: "PayOS Webhook endpoint is active and running!" });
 });
 
 // Background Job: Quét ghế hết hạn định kỳ mỗi 60 giây

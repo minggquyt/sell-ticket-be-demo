@@ -505,9 +505,20 @@ async function handlePaymentWebhook(orderIdentifier, isSuccess) {
       `SELECT * FROM orders WHERE (id::text = $1 OR order_code::text = $1) FOR UPDATE;`,
       [String(orderIdentifier)]
     );
-    if (orderRes.rows.length === 0) throw new Error('Không tìm thấy đơn hàng.');
+    if (orderRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      logger.payment('WARN', `Không tìm thấy đơn hàng #${orderIdentifier} trong CSDL (có thể là ping test từ PayOS). Bỏ qua an toàn.`);
+      return { success: true, message: 'Đơn hàng không tồn tại hoặc là ping test từ cổng thanh toán.' };
+    }
     const order = orderRes.rows[0];
     const orderId = order.id;
+
+    // Chống xử lý trùng lặp nếu đơn hàng đã được cập nhật trước đó
+    if (order.status === 'SUCCESS' && isSuccess) {
+      await client.query('COMMIT');
+      logger.payment('INFO', `Đơn #${order.order_code || orderId} đã ở trạng thái SUCCESS từ trước.`);
+      return { success: true, message: 'Đơn hàng đã được xử lý trước đó.' };
+    }
 
     let updatedSeats = [];
 

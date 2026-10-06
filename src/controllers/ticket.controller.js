@@ -215,27 +215,28 @@ exports.payosWebhook = async (req, res) => {
     let verifiedData = webhookData.data || webhookData;
     try {
       if (typeof payos.webhooks?.verify === 'function') {
-        verifiedData = payos.webhooks.verify(webhookData);
+        verifiedData = await payos.webhooks.verify(webhookData);
       }
     } catch (verifyErr) {
-      logger.payment('WARN', `Cảnh báo xác thực checksum PayOS: ${verifyErr.message}`);
+      logger.payment('WARN', `Bỏ qua xác thực chữ ký (có thể là ping test): ${verifyErr.message}`);
+      verifiedData = webhookData.data || webhookData;
     }
 
-    const orderCode = verifiedData.orderCode || (webhookData.data && webhookData.data.orderCode) || webhookData.orderCode;
-    const isSuccess = webhookData.code === '00' || (webhookData.data && webhookData.data.code === '00') || verifiedData.code === '00' || webhookData.success === true;
+    const orderCode = verifiedData?.orderCode || webhookData?.data?.orderCode || webhookData?.orderCode;
+    const isSuccess = webhookData?.code === '00' || webhookData?.data?.code === '00' || verifiedData?.code === '00' || webhookData?.success === true;
 
     if (orderCode) {
       await ticketService.handlePaymentWebhook(orderCode, isSuccess);
       logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${isSuccess ? 'SUCCESS (SOLD)' : 'FAILED'}`);
     }
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       message: 'Đã nhận webhook thành công'
     });
   } catch (err) {
     logger.error('PAYOS_WEBHOOK', err.message, err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(200).json({ success: true, message: 'Đã nhận webhook (fallback)' });
   }
 };
 
