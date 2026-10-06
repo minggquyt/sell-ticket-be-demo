@@ -1,4 +1,6 @@
 const pool = require('../config/db');
+const payos = require('../config/payos');
+const logger = require('../utils/logger');
 
 // Customer Function
 async function getUserOrderHistory(userId) {
@@ -54,6 +56,7 @@ async function requestSeatHold(userId, requestedSeatIds) {
     // 1. Kiểm tra Active Hold trước khi mở Transaction
     const hasActiveHold = await checkActiveHold(client, userId);
     if (hasActiveHold) {
+      logger.hold('CONFLICT', `User ${userId} bị chặn vì đang có phiên giữ vé chưa hoàn tất`);
       return {
         success: false,
         code: 'USER_HAS_ACTIVE_HOLD',
@@ -82,6 +85,7 @@ async function requestSeatHold(userId, requestedSeatIds) {
     // TRƯỜNG HỢP A: Không có ghế nào còn trống
     if (availableSeats.length === 0) {
       await client.query('ROLLBACK');
+      logger.hold('CONFLICT', `User ${userId} - Toàn bộ ${requestedSeatIds.length} ghế yêu cầu đều đã bị người khác chọn`);
       return {
         success: false,
         code: 'ALL_SEATS_TAKEN',
@@ -105,6 +109,7 @@ async function requestSeatHold(userId, requestedSeatIds) {
       );
 
       await client.query('COMMIT');
+      logger.hold('SUCCESS', `User ${userId} đã giữ thành công ${updateResult.rows.length} ghế: [${updateResult.rows.map(s => s.seat_number).join(', ')}] đến ${reservedUntil.toLocaleTimeString()}`);
 
       return {
         success: true,
@@ -127,6 +132,8 @@ async function requestSeatHold(userId, requestedSeatIds) {
       [unavailableSeatIds]
     );
 
+    logger.hold('CONFLICT', `User ${userId} chỉ giữ được một phần (${availableIds.length}/${requestedSeatIds.length} ghế)`);
+
     return {
       success: false,
       code: 'PARTIAL_AVAILABILITY',
@@ -141,6 +148,7 @@ async function requestSeatHold(userId, requestedSeatIds) {
     };
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error('SEAT_HOLD_REQUEST', err.message, err);
     throw err;
   } finally {
     client.release(); // Luôn giải phóng Connection
@@ -154,6 +162,7 @@ async function confirmPartialHold(userId, confirmSeatIds) {
     // 1. Kiểm tra Active Hold
     const hasActiveHold = await checkActiveHold(client, userId);
     if (hasActiveHold) {
+      logger.hold('CONFLICT', `User ${userId} bị chặn confirm vì đang có phiên giữ vé chưa hoàn tất`);
       return {
         success: false,
         code: 'USER_HAS_ACTIVE_HOLD',
@@ -182,6 +191,7 @@ async function confirmPartialHold(userId, confirmSeatIds) {
     if (updateResult.rows.length !== confirmSeatIds.length) {
       // Nếu không đủ số lượng -> Rollback hủy toàn bộ lượt chọn này
       await client.query('ROLLBACK');
+      logger.hold('CONFLICT', `User ${userId} xác nhận partial thất bại (ghế đã bị người khác chọn trong lúc chờ)`);
       return {
         success: false,
         code: 'PARTIAL_HOLD_EXPIRED',
@@ -190,6 +200,7 @@ async function confirmPartialHold(userId, confirmSeatIds) {
     }
 
     await client.query('COMMIT');
+    logger.hold('SUCCESS', `User ${userId} đã xác nhận partial giữ ${updateResult.rows.length} ghế thành công`);
 
     return {
       success: true,
@@ -199,6 +210,7 @@ async function confirmPartialHold(userId, confirmSeatIds) {
     };
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error('CONFIRM_PARTIAL_HOLD', err.message, err);
     throw err;
   } finally {
     client.release();
@@ -336,8 +348,11 @@ async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
 
     // Nếu không khớp đủ tổng số vé đã yêu cầu -> Cháy vé ở 1 khu vực hoặc user đang có phiên cũ
     if (result.rows.length !== totalRequested) {
+      logger.hold('CONFLICT', `User ${userId} giữ vé khu vực thất bại: Yêu cầu ${totalRequested} vé, đáp ứng ${result.rows.length} vé (Khu vực hết vé hoặc kẹt phiên)`);
       throw new Error('Số lượng vé khả dụng không đủ hoặc bạn đang có một phiên giữ vé chưa hoàn tất.');
     }
+
+    logger.hold('SUCCESS', `User ${userId} giữ thành công ${result.rows.length} vé khu vực: ${validRequests.map(r => `${r.zoneName} (${r.quantity})`).join(', ')} đến ${until.toLocaleTimeString()}`);
 
     return {
       seats: result.rows,
@@ -346,6 +361,9 @@ async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
       totalTickets: result.rows.length
     };
   } catch (err) {
+    if (err.message && !err.message.includes('Số lượng vé')) {
+      logger.error('RESERVE_ZONE_ERROR', err.message, err);
+    }
     throw err;
   }
 }
@@ -357,15 +375,21 @@ async function releaseReservedSeats(userId, seatIds) {
   try {
     await client.query('BEGIN');
 
-    // Chỉ giải phóng những ghế đang được giữ bởi chính user này và chưa bị bán
+    // Giải phóng những ghế đang được giữ bởi chính user này (kể cả đang RESERVED hoặc PAYMENT_PROCESSING)
     const result = await client.query(`
       UPDATE seats 
       SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL
       WHERE id = ANY($1::uuid[]) 
         AND reserved_by = $2 
-        AND status = 'RESERVED'
-      RETURNING id, seat_number;
+        AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
+      RETURNING id, seat_number, current_order_id;
     `, [seatIds, userId]);
+
+    // Nếu các ghế này gắn với order đang chờ thanh toán, cập nhật order thành CANCELLED
+    const orderIds = [...new Set(result.rows.map(r => r.current_order_id).filter(Boolean))];
+    if (orderIds.length > 0) {
+      await client.query(`UPDATE orders SET status = 'CANCELLED' WHERE id = ANY($1::uuid[]);`, [orderIds]);
+    }
 
     await client.query('COMMIT');
 
@@ -374,9 +398,12 @@ async function releaseReservedSeats(userId, seatIds) {
       localReservedSeats.delete(row.id);
     }
 
+    logger.release(`User ${userId} đã hủy/nhả ${result.rows.length} ghế [${result.rows.map(r => r.seat_number).join(', ')}] về AVAILABLE`);
+
     return result.rows;
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error('SEAT_RELEASE', err.message, err);
     throw err;
   } finally {
     client.release();
@@ -384,7 +411,7 @@ async function releaseReservedSeats(userId, seatIds) {
 }
 
 // Khởi tạo thanh toán
-async function startCheckoutSeats(userId, seatIds) {
+async function startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -404,12 +431,13 @@ async function startCheckoutSeats(userId, seatIds) {
       total += Number(seat.price);
     }
 
-    const paymentTimeout = new Date(Date.now() + 1 * 60 * 1000); // 1 phút chờ thanh toán
+    const paymentTimeout = new Date(Date.now() + 5 * 60 * 1000); // 5 phút chờ thanh toán
+    const orderCode = Number(String(Date.now()).slice(-6) + Math.floor(Math.random() * 90 + 10));
     const orderRes = await client.query(`
-      INSERT INTO orders (user_id, total_amount, status, expires_at) 
-      VALUES ($1, $2, 'PAYMENT_PROCESSING', $3) 
+      INSERT INTO orders (user_id, total_amount, status, expires_at, order_code) 
+      VALUES ($1, $2, 'PAYMENT_PROCESSING', $3, $4) 
       RETURNING *;
-    `, [userId, total, paymentTimeout]);
+    `, [userId, total, paymentTimeout, orderCode]);
     const order = orderRes.rows[0];
 
     for (const s of seatRes.rows) {
@@ -425,17 +453,43 @@ async function startCheckoutSeats(userId, seatIds) {
       WHERE id = ANY($3::uuid[]);
     `, [paymentTimeout, order.id, seatIds]);
 
+    // Tạo link thanh toán PayOS
+    let checkoutUrl = null;
+    try {
+      const payosOrder = {
+        orderCode: orderCode,
+        amount: Number(total),
+        description: `VE SU KIEN ${orderCode}`.slice(0, 25),
+        returnUrl: returnUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=success`,
+        cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=cancel`,
+      };
+      const paymentLink = await payos.paymentRequests.create(payosOrder);
+      checkoutUrl = paymentLink.checkoutUrl;
+    } catch (payErr) {
+      logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`);
+      throw new Error(`Không thể tạo liên kết thanh toán PayOS: ${payErr.message}`);
+    }
+
     await client.query('COMMIT');
 
-    // CẬP NHẬT MAP: Gia hạn thời gian giữ ghế trong RAM theo paymentTimeout mới (1 phút)
+    // CẬP NHẬT MAP: Gia hạn thời gian giữ ghế trong RAM theo paymentTimeout mới
     const newTimeoutMs = paymentTimeout.getTime();
     for (const seatId of seatIds) {
       localReservedSeats.set(seatId, newTimeoutMs);
     }
 
-    return { orderId: order.id, totalAmount: total, paymentTimeout: paymentTimeout };
+    logger.payment('START', `User ${userId} tạo đơn #${orderCode} | ${seatRes.rows.length} ghế [${seatRes.rows.map(s => s.seat_number).join(', ')}] | Tổng tiền: ${total.toLocaleString()}đ -> Checkout URL sẵn sàng`);
+
+    return { 
+      orderId: order.id, 
+      orderCode: orderCode, 
+      checkoutUrl: checkoutUrl, 
+      totalAmount: total, 
+      paymentTimeout: paymentTimeout 
+    };
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error('START_CHECKOUT', err.message, err);
     throw err;
   } finally {
     client.release();
@@ -443,15 +497,17 @@ async function startCheckoutSeats(userId, seatIds) {
 }
 
 // Webhook xử lý thanh toán
-async function handlePaymentWebhook(orderId, isSuccess) {
+async function handlePaymentWebhook(orderIdentifier, isSuccess) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const orderRes = await client.query(
-      `SELECT * FROM orders WHERE id = $1 FOR UPDATE;`,
-      [orderId]
+      `SELECT * FROM orders WHERE (id::text = $1 OR order_code::text = $1) FOR UPDATE;`,
+      [String(orderIdentifier)]
     );
     if (orderRes.rows.length === 0) throw new Error('Không tìm thấy đơn hàng.');
+    const order = orderRes.rows[0];
+    const orderId = order.id;
 
     let updatedSeats = [];
 
@@ -463,9 +519,10 @@ async function handlePaymentWebhook(orderId, isSuccess) {
         UPDATE seats 
         SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
         WHERE current_order_id = $1
-        RETURNING id;
+        RETURNING id, seat_number;
       `, [orderId]);
       updatedSeats = seatRes.rows;
+      logger.payment('SUCCESS', `Đơn #${order.order_code || orderId} THANH TOÁN THÀNH CÔNG! Đã chuyển ${updatedSeats.length} ghế [${updatedSeats.map(s => s.seat_number).join(', ')}] thành SOLD`);
     } else {
       await client.query(`UPDATE orders SET status = 'FAILED' WHERE id = $1;`, [orderId]);
 
@@ -474,23 +531,23 @@ async function handlePaymentWebhook(orderId, isSuccess) {
         UPDATE seats 
         SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
         WHERE current_order_id = $1
-        RETURNING id;
+        RETURNING id, seat_number;
       `, [orderId]);
       updatedSeats = seatRes.rows;
+      logger.payment('CANCEL', `Đơn #${order.order_code || orderId} THẤT BẠI/HỦY! Đã trả ${updatedSeats.length} ghế [${updatedSeats.map(s => s.seat_number).join(', ')}] về AVAILABLE`);
     }
 
     await client.query('COMMIT');
 
     // CẬP NHẬT MAP: Xóa toàn bộ các ghế liên quan khỏi RAM
-    // - Thành công (SOLD): Giải phóng RAM (dưới DB đã chặn vĩnh viễn)
-    // - Thất bại (FAILED): Cho phép người dùng khác chọn ngay mà không bị Early Rejection chặn
     for (const seat of updatedSeats) {
       localReservedSeats.delete(seat.id);
     }
 
-    return { status: isSuccess ? 'SUCCESS' : 'FAILED' };
+    return { status: isSuccess ? 'SUCCESS' : 'FAILED', orderId: orderId, orderCode: order.order_code };
   } catch (err) {
     await client.query('ROLLBACK');
+    logger.error('HANDLE_PAYMENT_WEBHOOK', err.message, err);
     throw err;
   } finally {
     client.release();

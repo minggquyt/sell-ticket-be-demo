@@ -1,4 +1,6 @@
 const ticketService = require('../services/ticket.service');
+const payos = require('../config/payos');
+const logger = require('../utils/logger');
 
 // Customer Service
 exports.getEvents = async (req, res) => {
@@ -193,19 +195,54 @@ exports.getMyOrders = async (req, res) => {
   }
 };
 
-// Bấm nút thanh toán -> Đổi sang PAYMENT_PROCESSING
+// Bấm nút thanh toán -> Tạo đơn và lấy Checkout URL từ PayOS
 exports.startCheckout = async (req, res) => {
   try {
-    const result = await ticketService.startCheckoutSeats(req.user.id, req.body.seatIds);
-    res.json({ success: true, message: 'Chuyển sang thanh toán...', data: result });
+    const { seatIds, returnUrl, cancelUrl } = req.body;
+    const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl);
+    res.json({ success: true, message: 'Khởi tạo thanh toán PayOS thành công!', data: result });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
 };
-// Webhook giả lập (hoặc do IPN cổng thanh toán gọi đến)
+
+// Webhook nhận thông báo tự động từ PayOS
+exports.payosWebhook = async (req, res) => {
+  try {
+    const webhookData = req.body;
+    logger.payment('WEBHOOK', `Nhận Webhook từ PayOS: ${JSON.stringify(webhookData)}`);
+
+    let verifiedData = webhookData.data || webhookData;
+    try {
+      if (typeof payos.webhooks?.verify === 'function') {
+        verifiedData = payos.webhooks.verify(webhookData);
+      }
+    } catch (verifyErr) {
+      logger.payment('WARN', `Cảnh báo xác thực checksum PayOS: ${verifyErr.message}`);
+    }
+
+    const orderCode = verifiedData.orderCode || (webhookData.data && webhookData.data.orderCode) || webhookData.orderCode;
+    const isSuccess = webhookData.code === '00' || (webhookData.data && webhookData.data.code === '00') || verifiedData.code === '00' || webhookData.success === true;
+
+    if (orderCode) {
+      await ticketService.handlePaymentWebhook(orderCode, isSuccess);
+      logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${isSuccess ? 'SUCCESS (SOLD)' : 'FAILED'}`);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Đã nhận webhook thành công'
+    });
+  } catch (err) {
+    logger.error('PAYOS_WEBHOOK', err.message, err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// Webhook giả lập (để kiểm thử thủ công nếu cần)
 exports.webhook = async (req, res) => {
   try {
-    const result = await ticketService.handlePaymentWebhook(req.body.orderId, Boolean(req.body.success));
+    const result = await ticketService.handlePaymentWebhook(req.body.orderId || req.body.orderCode, Boolean(req.body.success));
     res.json({ success: true, data: result });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

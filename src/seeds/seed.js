@@ -36,7 +36,7 @@ async function seed() {
     for (let i = 1; i <= 12; i++) {
       await client.query(`
         INSERT INTO seats (event_id, seat_number, zone_name, price, status)
-        VALUES ($1, $2, 'STANDARD', 300000, 'AVAILABLE');
+        VALUES ($1, $2, 'STANDARD', 2000, 'AVAILABLE');
       `, [event1Id, `A${i}`]);
     }
 
@@ -50,13 +50,13 @@ async function seed() {
     for (let i = 1; i <= 10; i++) {
       await client.query(`
         INSERT INTO seats (event_id, seat_number, zone_name, price, status)
-        VALUES ($1, $2, 'VIP', 750000, 'AVAILABLE');
+        VALUES ($1, $2, 'VIP', 5000, 'AVAILABLE');
       `, [event2Id, `VIP-${String(i).padStart(2, '0')}`]);
     }
     for (let i = 1; i <= 20; i++) {
       await client.query(`
         INSERT INTO seats (event_id, seat_number, zone_name, price, status)
-        VALUES ($1, $2, 'REGULAR', 400000, 'AVAILABLE');
+        VALUES ($1, $2, 'REGULAR', 3000, 'AVAILABLE');
       `, [event2Id, `REG-${String(i).padStart(2, '0')}`]);
     }
 
