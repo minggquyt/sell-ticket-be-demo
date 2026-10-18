@@ -1,10 +1,10 @@
 const express = require("express");
 const path = require("path");
 const cors = require("cors");
-const pool = require("./src/config/db");
 const indexRoutes = require("./src/routes/index.route");
 const ticketController = require("./src/controllers/ticket.controller");
 const logger = require("./src/utils/logger");
+const { startSeatReleaseJob } = require("./src/jobs/seat-release.job");
 
 const app = express();
 app.use(cors());
@@ -77,25 +77,8 @@ app.get("/logs", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "logs.html"));
 });
 
-// Background Job: Quét ghế hết hạn định kỳ mỗi 60 giây
-setInterval(async () => {
-  try {
-    const releaseQuery = `
-      UPDATE seats 
-      SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
-      WHERE status IN ('RESERVED', 'PAYMENT_PROCESSING') AND reserved_until < NOW()
-      RETURNING id, seat_number;
-    `;
-    const res = await pool.query(releaseQuery);
-    if (res.rows.length > 0) {
-      logger.cron(
-        `Đã tự động giải phóng ${res.rows.length} ghế hết hạn: ${res.rows.map((s) => s.seat_number).join(", ")}`,
-      );
-    }
-  } catch (err) {
-    logger.error("CRON_AUTO_RELEASE", err.message);
-  }
-}, 60 * 1000);
+// Khởi động background job quét ghế hết hạn
+startSeatReleaseJob();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
