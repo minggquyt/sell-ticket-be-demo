@@ -90,9 +90,9 @@ class CreateEventResponseDTO {
       title: event.title,
       description: event.description,
       location: event.location,
-      startTime: event.start_time,
-      eventType: event.event_type,
-      createdAt: event.created_at
+      start_time: event.start_time,
+      event_type: event.event_type,
+      created_at: event.created_at
     };
   }
 

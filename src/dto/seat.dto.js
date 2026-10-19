@@ -63,7 +63,12 @@ class ConfirmPartialHoldDTO {
 class ReserveZoneDTO {
   constructor(body) {
     this.eventId = body.eventId;
-    this.zones = body.zones;
+    this.zones = Array.isArray(body.zones)
+      ? body.zones.map(z => ({
+          ...z,
+          zone_name: z.zone_name || z.zoneName
+        }))
+      : body.zones;
   }
 
   validate() {
@@ -82,8 +87,8 @@ class ReserveZoneDTO {
     } else {
       // Validate each zone
       this.zones.forEach((zone, index) => {
-        if (!zone.zoneName) {
-          errors.push(`zones[${index}].zoneName là bắt buộc.`);
+        if (!zone.zone_name) {
+          errors.push(`zones[${index}].zone_name là bắt buộc.`);
         }
         if (!zone.quantity || zone.quantity <= 0) {
           errors.push(`zones[${index}].quantity phải lớn hơn 0.`);
@@ -145,20 +150,20 @@ class ReleaseSeatDTO {
 class SeatResponseDTO {
   constructor(seat) {
     this.id = seat.id;
-    this.seatNumber = seat.seat_number;
+    this.seat_number = seat.seat_number;
     this.status = seat.status;
-    this.reservedUntil = seat.reserved_until;
-    this.zoneName = seat.zone_name;
+    this.reserved_until = seat.reserved_until;
+    this.zone_name = seat.zone_name;
     this.price = seat.price;
   }
 
   toJSON() {
     return {
       id: this.id,
-      seatNumber: this.seatNumber,
+      seat_number: this.seat_number,
       status: this.status,
-      reservedUntil: this.reservedUntil,
-      zoneName: this.zoneName,
+      reserved_until: this.reserved_until,
+      zone_name: this.zone_name,
       price: this.price
     };
   }
@@ -171,7 +176,7 @@ class SeatHoldSuccessResponseDTO {
     this.message = 'Đã giữ chỗ thành công.';
     this.data = {
       seatIds: result.reservedSeats.map(s => s.id),
-      reservedUntil: result.reservedUntil,
+      reserved_until: result.reservedUntil,
       seats: result.reservedSeats.map(s => new SeatResponseDTO(s).toJSON())
     };
   }
@@ -231,7 +236,7 @@ class ZoneReserveSuccessResponseDTO {
     this.data = {
       seats: result.seats.map(s => new SeatResponseDTO(s).toJSON()),
       seatIds: result.seatIds,
-      reservedUntil: result.reserved_until,
+      reserved_until: result.reserved_until,
       totalTickets: result.totalTickets
     };
   }
@@ -251,8 +256,8 @@ class ReleaseSeatsResponseDTO {
     this.message = 'Đã hủy giữ chỗ thành công.';
     this.data = released.map(seat => ({
       id: seat.id,
-      seatNumber: seat.seat_number,
-      currentOrderId: seat.current_order_id
+      seat_number: seat.seat_number,
+      current_order_id: seat.current_order_id
     }));
   }
 

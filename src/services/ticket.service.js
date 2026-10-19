@@ -204,7 +204,7 @@ class TicketService {
     }
 
     const validRequests = zoneRequests
-      .map(r => ({ zoneName: r.zoneName, quantity: Number(r.quantity) }))
+      .map(r => ({ zone_name: r.zone_name || r.zoneName, quantity: Number(r.quantity) }))
       .filter(r => r.quantity > 0);
 
     if (validRequests.length === 0) {
@@ -224,8 +224,8 @@ class TicketService {
       LIMIT 1
     ),
     zone_demands AS (
-      SELECT "zoneName" AS zone_name, quantity::int AS required_qty 
-      FROM jsonb_to_recordset($3::jsonb) AS x("zoneName" text, quantity int)
+      SELECT zone_name, quantity::int AS required_qty 
+      FROM jsonb_to_recordset($3::jsonb) AS x(zone_name text, quantity int)
       WHERE NOT EXISTS (SELECT 1 FROM user_active_hold)
     ),
     locked_seats AS (
@@ -346,10 +346,10 @@ class TicketService {
       const paymentTimeout = new Date(Date.now() + PAYMENT_TIMEOUT_MINUTES * 60 * 1000);
       const orderCode = Number(String(Date.now()).slice(-6) + Math.floor(Math.random() * 90 + 10));
       
-      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, orderCode);
+      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, orderCode, client);
 
       for (const s of seatRes.rows) {
-        await ticketRepository.createOrderItem(order.id, s.id, s.price);
+        await ticketRepository.createOrderItem(order.id, s.id, s.price, client);
       }
 
       await client.query(`
@@ -427,7 +427,7 @@ class TicketService {
       let updatedSeats = [];
 
       if (isSuccess) {
-        await ticketRepository.updateOrderStatus(orderId, 'SUCCESS');
+        await ticketRepository.updateOrderStatus(orderId, 'SUCCESS', client);
 
         const seatRes = await client.query(`
           UPDATE seats 
@@ -438,7 +438,7 @@ class TicketService {
         updatedSeats = seatRes.rows;
         logger.payment('SUCCESS', `Đơn #${order.order_code || orderId} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
       } else {
-        await ticketRepository.updateOrderStatus(orderId, 'FAILED');
+        await ticketRepository.updateOrderStatus(orderId, 'FAILED', client);
 
         const seatRes = await client.query(`
           UPDATE seats 
@@ -479,7 +479,8 @@ class TicketService {
         description,
         location,
         start_time || new Date(),
-        event_type
+        event_type,
+        client
       );
 
       if (event_type === 'SEAT_BASED') {

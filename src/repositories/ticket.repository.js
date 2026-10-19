@@ -17,8 +17,8 @@ class TicketRepository {
     return result.rows[0] || null;
   }
 
-  async createEvent(title, description, location, startTime, eventType) {
-    const result = await pool.query(
+  async createEvent(title, description, location, startTime, eventType, dbClient = pool) {
+    const result = await dbClient.query(
       `INSERT INTO events (title, description, location, start_time, event_type)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *;`,
@@ -121,8 +121,8 @@ class TicketRepository {
     return result.rows;
   }
 
-  async createOrder(userId, totalAmount, expiresAt, orderCode) {
-    const result = await pool.query(
+  async createOrder(userId, totalAmount, expiresAt, orderCode, dbClient = pool) {
+    const result = await dbClient.query(
       `INSERT INTO orders (user_id, total_amount, status, expires_at, order_code) 
        VALUES ($1, $2, 'PAYMENT_PROCESSING', $3, $4) 
        RETURNING *;`,
@@ -131,8 +131,8 @@ class TicketRepository {
     return result.rows[0];
   }
 
-  async createOrderItem(orderId, seatId, price) {
-    await pool.query(
+  async createOrderItem(orderId, seatId, price, dbClient = pool) {
+    await dbClient.query(
       `INSERT INTO order_items (order_id, seat_id, price) VALUES ($1, $2, $3);`,
       [orderId, seatId, price]
     );
@@ -146,8 +146,8 @@ class TicketRepository {
     return result.rows[0] || null;
   }
 
-  async updateOrderStatus(orderId, status) {
-    await pool.query(
+  async updateOrderStatus(orderId, status, dbClient = pool) {
+    await dbClient.query(
       `UPDATE orders SET status = $1 WHERE id = $2;`,
       [status, orderId]
     );
