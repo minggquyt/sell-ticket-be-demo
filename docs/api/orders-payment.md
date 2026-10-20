@@ -38,8 +38,9 @@ Authorization: Bearer <token>
 #### returnUrl, cancelUrl
 - **Type**: String (URL)
 - **Required**: Không (có default)
-- **Default returnUrl**: `http://127.0.0.1:5500/index.html?orderId={orderId}&status=success`
-- **Default cancelUrl**: `http://127.0.0.1:5500/index.html?orderId={orderId}&status=cancel`
+- **Default returnUrl**: `http://127.0.0.1:5500/index.html?status=success&order_id={orderId}`
+- **Default cancelUrl**: `http://127.0.0.1:5500/index.html?status=cancel&order_id={orderId}`
+- Backend luôn thêm hoặc thay `order_id` bằng UUID của order vào URL do client truyền.
 
 ### Business Rules
 
@@ -71,10 +72,12 @@ Authorization: Bearer <token>
     "770e8400-e29b-41d4-a716-446655440010",
     "770e8400-e29b-41d4-a716-446655440011"
   ],
-  "returnUrl": "https://yoursite.com/payment-success",
-  "cancelUrl": "https://yoursite.com/payment-cancel"
+  "returnUrl": "https://yoursite.com/payment?status=success",
+  "cancelUrl": "https://yoursite.com/payment?status=cancel"
 }
 ```
+
+PayOS sẽ điều hướng về các URL trên với `order_id` được backend thêm vào query string.
 
 ### Response Success (200)
 
@@ -183,7 +186,7 @@ if (data.success) {
 
 ### Endpoint
 ```
-GET /api/orders/my-orders
+GET /api/orders/my-history
 ```
 
 ### Authentication
@@ -302,8 +305,67 @@ Không có
 ### cURL Example
 
 ```bash
-curl -X GET http://localhost:3000/api/orders/my-orders \
+curl -X GET http://localhost:3000/api/orders/my-history \
   -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Xem hóa đơn/chi tiết đơn hàng
+
+### Endpoint
+
+```http
+GET /api/orders/:orderId/invoice
+```
+
+`orderId` là UUID của đơn hàng trong hệ thống (cột `orders.id`), không phải `order_code`.
+
+### Authentication
+
+✅ Required - JWT token. Người dùng chỉ xem được đơn hàng của chính mình.
+
+### Response Success (200)
+
+```json
+{
+  "success": true,
+  "data": {
+    "orderId": "bb0e8400-e29b-41d4-a716-446655440100",
+    "orderCode": 12345678,
+    "orderStatus": "SUCCESS",
+    "totalAmount": "1000000",
+    "expiresAt": "2026-10-20T08:30:00.000Z",
+    "createdAt": "2026-10-20T08:25:00.000Z",
+    "customer": {
+      "fullName": "Nguyen Van A",
+      "email": "user@example.com"
+    },
+    "items": [
+      {
+        "eventId": "550e8400-e29b-41d4-a716-446655440000",
+        "eventTitle": "Concert",
+        "eventType": "SEAT_BASED",
+        "location": "Nhà hát",
+        "startTime": "2026-10-25T12:00:00.000Z",
+        "seatNumber": "A1",
+        "zoneName": "VIP",
+        "price": "500000"
+      }
+    ]
+  }
+}
+```
+
+Chi tiết được tổng hợp từ `orders`, `users`, `order_items`, `seats` và `events` theo [schema hệ thống](../database/schema.md). Endpoint trả `404` nếu order không tồn tại hoặc không thuộc người dùng đang đăng nhập; `400` nếu `orderId` không đúng định dạng UUID.
+
+> Schema hiện không có bảng invoice hoặc payment transaction riêng. Endpoint này trả về thông tin đơn hàng dạng hóa đơn/biên nhận để hiển thị; không thay thế hóa đơn điện tử hoặc chứng từ thuế.
+
+### cURL Example
+
+```bash
+curl http://localhost:3000/api/orders/bb0e8400-e29b-41d4-a716-446655440100/invoice \
+  -H "Authorization: Bearer <jwt>"
 ```
 
 ---

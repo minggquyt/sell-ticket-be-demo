@@ -113,6 +113,41 @@ class OrderHistoryResponseDTO {
   }
 }
 
+class OrderInvoiceResponseDTO {
+  constructor(invoice) {
+    this.success = true;
+    this.data = {
+      orderId: invoice.order_id,
+      orderCode: invoice.order_code,
+      orderStatus: invoice.order_status,
+      totalAmount: invoice.total_amount,
+      expiresAt: invoice.expires_at,
+      createdAt: invoice.created_at,
+      customer: {
+        fullName: invoice.customer_full_name,
+        email: invoice.customer_email
+      },
+      items: invoice.items.map(item => ({
+        eventId: item.event_id,
+        eventTitle: item.event_title,
+        eventType: item.event_type,
+        location: item.location,
+        startTime: item.start_time,
+        seatNumber: item.seat_number,
+        zoneName: item.zone_name,
+        price: item.price
+      }))
+    };
+  }
+
+  toJSON() {
+    return {
+      success: this.success,
+      data: this.data
+    };
+  }
+}
+
 class ErrorResponseDTO {
   constructor(message) {
     this.success = false;
@@ -133,6 +168,7 @@ module.exports = {
   // Response DTOs
   CheckoutResponseDTO,
   OrderHistoryResponseDTO,
+  OrderInvoiceResponseDTO,
   OrderHistoryItemDTO,
   OrderItemDTO,
   ErrorResponseDTO

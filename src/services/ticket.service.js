@@ -10,6 +10,13 @@ const {
 // Khai báo Map lưu vết các ghế đang tạm giữ trong RAM Node.js: seatId -> expiredAt (timestamp)
 const localReservedSeats = new Map();
 
+function addOrderIdToReturnUrl(returnUrl, orderId) {
+  const url = new URL(returnUrl);
+  url.searchParams.delete('order_id');
+  url.searchParams.set('order_id', orderId);
+  return url.toString();
+}
+
 // Định kỳ dọn dẹp các ghế đã hết hạn trong RAM (mỗi 10 giây chạy 1 lần để tránh rò rỉ bộ nhớ)
 setInterval(() => {
   const currentTime = Date.now();
@@ -24,6 +31,10 @@ class TicketService {
   // Customer Functions
   async getUserOrderHistory(userId) {
     return await ticketRepository.getUserOrderHistory(userId);
+  }
+
+  async getOrderInvoice(orderId, userId) {
+    return await ticketRepository.getOrderInvoice(orderId, userId);
   }
 
   async getAllEvents() {
@@ -359,13 +370,25 @@ class TicketService {
       `, [paymentTimeout, order.id, seatIds]);
 
       let checkoutUrl = null;
+      const payosReturnUrl = addOrderIdToReturnUrl(
+        returnUrl || `http://127.0.0.1:5500/index.html?status=success`,
+        order.id
+      );
+      const payosCancelUrl = addOrderIdToReturnUrl(
+        cancelUrl || `http://127.0.0.1:5500/index.html?status=cancel`,
+        order.id
+      );
+      console.log('PayOS redirect URLs:', {
+        returnUrl: payosReturnUrl,
+        cancelUrl: payosCancelUrl
+      });
       try {
         const payosOrder = {
           orderCode: orderCode,
           amount: Number(total),
           description: `VE SU KIEN ${orderCode}`.slice(0, 25),
-          returnUrl: returnUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=success`,
-          cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=cancel`,
+          returnUrl: payosReturnUrl,
+          cancelUrl: payosCancelUrl,
         };
         const paymentLink = await payos.paymentRequests.create(payosOrder);
         checkoutUrl = paymentLink.checkoutUrl;

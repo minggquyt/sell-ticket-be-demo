@@ -121,6 +121,44 @@ class TicketRepository {
     return result.rows;
   }
 
+  async getOrderInvoice(orderId, userId) {
+    const result = await pool.query(
+      `SELECT
+        o.id AS order_id,
+        o.order_code,
+        o.total_amount,
+        o.status AS order_status,
+        o.expires_at,
+        o.created_at,
+        u.full_name AS customer_full_name,
+        u.email AS customer_email,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'event_id', e.id,
+              'event_title', e.title,
+              'event_type', e.event_type,
+              'location', e.location,
+              'start_time', e.start_time,
+              'seat_number', s.seat_number,
+              'zone_name', s.zone_name,
+              'price', oi.price
+            ) ORDER BY oi.id
+          ) FILTER (WHERE oi.id IS NOT NULL),
+          '[]'
+        ) AS items
+      FROM orders o
+      JOIN users u ON u.id = o.user_id
+      LEFT JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN seats s ON s.id = oi.seat_id
+      LEFT JOIN events e ON e.id = s.event_id
+      WHERE o.id = $1 AND o.user_id = $2
+      GROUP BY o.id, u.id;`,
+      [orderId, userId]
+    );
+    return result.rows[0] || null;
+  }
+
   async createOrder(userId, totalAmount, expiresAt, orderCode, dbClient = pool) {
     const result = await dbClient.query(
       `INSERT INTO orders (user_id, total_amount, status, expires_at, order_code) 

@@ -11,6 +11,10 @@
 ```
 docs/
 ├── README.md                    # Trang này
+├── flow/                        # Tài liệu các luồng nghiệp vụ
+│   └── payment-flow.md          # Luồng thanh toán client → backend → PayOS
+├── database/                    # Tài liệu cơ sở dữ liệu
+│   └── schema.md                # Mô tả schema và quan hệ giữa các bảng
 ├── api/                         # API Documentation
 │   ├── authentication.md        # Auth APIs (Register, Login)
 │   ├── events.md                # Event APIs (List, Details)
@@ -33,7 +37,14 @@ docs/
 | **Events** | [events.md](./api/events.md) | Lấy danh sách sự kiện, xem chi tiết ghế/zone |
 | **Seat Booking** | [seat-booking.md](./api/seat-booking.md) | Giữ ghế, xác nhận partial, hủy giữ chỗ |
 | **Orders & Payment** | [orders-payment.md](./api/orders-payment.md) | Thanh toán, lịch sử đơn hàng, PayOS webhook |
+| **Payment Flow** | [payment-flow.md](./flow/payment-flow.md) | Luồng thanh toán từ client qua backend đến PayOS |
 | **Admin** | [admin.md](./api/admin.md) | Tạo/xóa sự kiện (ADMIN only) |
+
+### Database
+
+| Topic | File | Description |
+|-------|------|-------------|
+| **Database Schema** | [schema.md](./database/schema.md) | Các bảng, cột, ràng buộc và quan hệ dữ liệu |
 
 ### Version History
 

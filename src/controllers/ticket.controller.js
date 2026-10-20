@@ -23,6 +23,7 @@ const {
   CheckoutRequestDTO,
   CheckoutResponseDTO,
   OrderHistoryResponseDTO,
+  OrderInvoiceResponseDTO,
   ErrorResponseDTO: OrderErrorDTO
 } = require('../dto/order.dto');
 
@@ -185,6 +186,28 @@ exports.getMyOrders = async (req, res) => {
   } catch (err) {
     const errorDto = new OrderErrorDTO(err.message);
     res.status(500).json(errorDto.toJSON());
+  }
+};
+
+exports.getOrderInvoice = async (req, res) => {
+  const { orderId } = req.params;
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(orderId)) {
+    const errorDto = new OrderErrorDTO('orderId phải là UUID hợp lệ.');
+    return res.status(400).json(errorDto.toJSON());
+  }
+
+  try {
+    const invoice = await ticketService.getOrderInvoice(orderId, req.user.id);
+    if (!invoice) {
+      const errorDto = new OrderErrorDTO('Không tìm thấy đơn hàng.');
+      return res.status(404).json(errorDto.toJSON());
+    }
+
+    const responseDto = new OrderInvoiceResponseDTO(invoice);
+    return res.json(responseDto.toJSON());
+  } catch (err) {
+    const errorDto = new OrderErrorDTO(err.message);
+    return res.status(500).json(errorDto.toJSON());
   }
 };
 
