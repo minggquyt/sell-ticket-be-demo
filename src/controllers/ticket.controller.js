@@ -77,6 +77,8 @@ const MAX_TICKETS = 4;
 exports.requestSeatHold = async (req, res) => {
   try {
     const { seatIds } = req.body;
+
+    console.log("Nguười dùng gửi request giữ ghế")
     
     // Validate danh sách ghế gửi lên
     if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {

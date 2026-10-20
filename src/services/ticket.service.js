@@ -103,7 +103,7 @@ async function requestSeatHold(userId, requestedSeatIds) {
         UPDATE seats 
         SET status = 'RESERVED', reserved_by = $1, reserved_until = $2
         WHERE id = ANY($3::uuid[])
-        RETURNING id, seat_number, status, reserved_until;
+        RETURNING id, seat_number, status, reserved_until, price;
         `,
         [userId, reservedUntil, availableIds]
       );
@@ -182,7 +182,7 @@ async function confirmPartialHold(userId, confirmSeatIds) {
       SET status = 'RESERVED', reserved_by = $1, reserved_until = $2
       WHERE id = ANY($3::uuid[])
         AND status = 'AVAILABLE'
-      RETURNING id, seat_number, status, reserved_until;
+      RETURNING id, seat_number, status, reserved_until, price;
       `,
       [userId, reservedUntil, confirmSeatIds]
     );
@@ -267,18 +267,15 @@ setInterval(() => {
   }
 }, 10 * 1000);
 
-// Giữ ghế Seat-based tối ưu hiệu năng cao
-
 // Giữ ghế Zone-based
 async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
-  // zoneRequests: [ { zoneName: 'VIP', quantity: 2 }, { zoneName: 'REGULAR', quantity: 3 } ]
   if (!zoneRequests || !Array.isArray(zoneRequests) || zoneRequests.length === 0) {
     throw new Error('Danh sách khu vực chọn không hợp lệ.');
   }
 
   // Lọc bỏ các request có quantity <= 0
   const validRequests = zoneRequests
-    .map(r => ({ zoneName: r.zoneName, quantity: Number(r.quantity) }))
+    .map(r => ({ zoneName: r.zone_name, quantity: Number(r.quantity) }))
     .filter(r => r.quantity > 0);
 
   if (validRequests.length === 0) {
@@ -335,7 +332,6 @@ async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
     )
   RETURNING id, seat_number, zone_name, price, status, reserved_until;
 `;
-
   try {
     // 1 lần trao đổi mạng duy nhất (1 Round-trip)
     const result = await pool.query(query, [
@@ -367,7 +363,6 @@ async function reserveSeatsByMultipleZones(userId, eventId, zoneRequests) {
     throw err;
   }
 }
-
 
 // Hủy giữ ghế
 async function releaseReservedSeats(userId, seatIds) {
@@ -431,7 +426,7 @@ async function startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
       total += Number(seat.price);
     }
 
-    const paymentTimeout = new Date(Date.now() + 5 * 60 * 1000); // 5 phút chờ thanh toán
+    const paymentTimeout = new Date(Date.now() + 1 * 30 * 1000); // 30s chờ thanh toán
     const orderCode = Number(String(Date.now()).slice(-6) + Math.floor(Math.random() * 90 + 10));
     const orderRes = await client.query(`
       INSERT INTO orders (user_id, total_amount, status, expires_at, order_code) 
@@ -480,6 +475,7 @@ async function startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
 
     logger.payment('START', `User ${userId} tạo đơn #${orderCode} | ${seatRes.rows.length} ghế [${seatRes.rows.map(s => s.seat_number).join(', ')}] | Tổng tiền: ${total.toLocaleString()}đ -> Checkout URL sẵn sàng`);
 
+
     return { 
       orderId: order.id, 
       orderCode: orderCode, 
@@ -487,6 +483,7 @@ async function startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
       totalAmount: total, 
       paymentTimeout: paymentTimeout 
     };
+
   } catch (err) {
     await client.query('ROLLBACK');
     logger.error('START_CHECKOUT', err.message, err);
@@ -499,6 +496,7 @@ async function startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
 // Webhook xử lý thanh toán
 async function handlePaymentWebhook(orderIdentifier, isSuccess) {
   const client = await pool.connect();
+
   try {
     await client.query('BEGIN');
     const orderRes = await client.query(
@@ -556,26 +554,74 @@ async function handlePaymentWebhook(orderIdentifier, isSuccess) {
 
 // Admin Function 
 async function createEventWithConfig(eventData) {
-  const { title, description, location, start_time, event_type, seatConfig, zoneConfigs } = eventData;
+  const { 
+    title, 
+    description, 
+    location, 
+    start_time, 
+    event_type, 
+    category,
+    time,
+    min_price,
+    max_price,
+    image,
+    banner,
+    organizer,
+    highlights,
+    rules,
+    seatConfig, // FE config
+    zoneConfigs // FE config
+  } = eventData;
+  
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // 1. Tạo sự kiện
+    // 1. Tạo sự kiện với đầy đủ các trường mới
     const eventRes = await client.query(`
-      INSERT INTO events (title, description, location, start_time, event_type)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO events (
+        title, 
+        description, 
+        location, 
+        start_time, 
+        event_type, 
+        category,
+        time,
+        min_price,
+        max_price,
+        image,
+        banner,
+        organizer,
+        highlights,
+        rules
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *;
-    `, [title, description, location, start_time || new Date(), event_type]);
+    `, [
+      title, 
+      description, 
+      location, 
+      start_time || new Date(), 
+      event_type, 
+      category || null,
+      time || null,
+      min_price || 0,
+      max_price || 0,
+      image || null,
+      banner || null,
+      organizer || null,
+      highlights ? JSON.stringify(highlights) : null,
+      rules ? JSON.stringify(rules) : null
+    ]);
+    
     const event = eventRes.rows[0];
 
-    // 2. Cấu hình ghế tùy theo loại sự kiện
+    // 2. Cấu hình ghế tùy theo loại sự kiện (Giữ nguyên logic cũ của bạn)
     if (event_type === 'SEAT_BASED') {
-      // seatConfig: { totalSeats: 20, price: 300000, prefix: 'A' }
-      const total = Number(seatConfig.totalSeats) || 12;
-      const price = Number(seatConfig.price) || 200000;
-      const prefix = seatConfig.prefix || 'S';
+      const total = Number(seatConfig?.totalSeats) || 12;
+      const price = Number(seatConfig?.price) || 200000;
+      const prefix = seatConfig?.prefix || 'S';
 
       for (let i = 1; i <= total; i++) {
         await client.query(`
@@ -584,7 +630,6 @@ async function createEventWithConfig(eventData) {
         `, [event.id, `${prefix}${i}`, price]);
       }
     } else {
-      // zoneConfigs: [ { zoneName: 'VIP', count: 10, price: 500000 }, { zoneName: 'REGULAR', count: 20, price: 250000 } ]
       for (const z of (zoneConfigs || [])) {
         const count = Number(z.count) || 10;
         const price = Number(z.price) || 200000;
