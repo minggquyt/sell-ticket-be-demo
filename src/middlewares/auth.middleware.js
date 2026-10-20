@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET;
+const { JWT_SECRET } = require('../config/constants');
 
 function verifyToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -38,4 +38,4 @@ function requireAdmin(req, res, next) {
   }
 }
 
-module.exports = { verifyToken, requireAdmin, JWT_SECRET, authorizeRoles };
+module.exports = { verifyToken, requireAdmin, authorizeRoles };

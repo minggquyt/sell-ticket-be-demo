@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🚀 Live System Logs - VeSKOnl Ticket & PayOS</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --cyan: #38bdf8;
+      --green: #22c55e;
+      --yellow: #facc15;
+      --red: #f43f5e;
+      --purple: #c084fc;
+      --magenta: #e879f9;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #f8fafc;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .status-badge.disconnected {
+      background: rgba(244, 63, 94, 0.15);
+      color: #fb7185;
+      border-color: rgba(244, 63, 94, 0.3);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      background: #1f2937;
+      color: #cbd5e1;
+      border: 1px solid #374151;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn:hover {
+      background: #374151;
+      color: #fff;
+    }
+
+    .btn.active {
+      background: #0284c7;
+      color: #fff;
+      border-color: #38bdf8;
+    }
+
+    .controls-bar {
+      background: #0d131f;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .filter-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .pill {
+      background: #182234;
+      border: 1px solid #283548;
+      color: #94a3b8;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s;
+    }
+
+    .pill:hover {
+      color: #f1f5f9;
+      border-color: #475569;
+    }
+
+    .pill.active {
+      background: #1e3a8a;
+      color: #93c5fd;
+      border-color: #3b82f6;
+      font-weight: 600;
+    }
+
+    .search-box {
+      flex: 1;
+      max-width: 320px;
+      min-width: 200px;
+      position: relative;
+    }
+
+    .search-input {
+      width: 100%;
+      background: #131d2e;
+      border: 1px solid #283548;
+      color: #f8fafc;
+      padding: 6px 10px 6px 28px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: #38bdf8;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #64748b;
+      font-size: 0.8rem;
+    }
+
+    main {
+      flex: 1;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .terminal-container {
+      flex: 1;
+      background: #080c14;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 480px;
+    }
+
+    .terminal-header {
+      background: #0f172a;
+      border-bottom: 1px solid #1e293b;
+      padding: 8px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .w-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .w-red { background: #ef4444; }
+    .w-yellow { background: #eab308; }
+    .w-green { background: #22c55e; }
+
+    #logList {
+      flex: 1;
+      padding: 12px 16px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      line-height: 1.6;
+      list-style: none;
+    }
+
+    .log-row {
+      display: flex;
+      gap: 10px;
+      padding: 3px 0;
+      border-radius: 4px;
+      transition: background 0.1s;
+      word-break: break-all;
+    }
+
+    .log-row:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .log-time {
+      color: var(--text-muted);
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .log-tag {
+      flex-shrink: 0;
+      font-weight: 700;
+      padding: 0 4px;
+      border-radius: 3px;
+    }
+
+    .tag-HTTP { color: var(--cyan); }
+    .tag-AUTH { color: var(--green); }
+    .tag-HOLD { color: var(--yellow); }
+    .tag-RELEASE { color: var(--magenta); }
+    .tag-PAYMENT { color: #f59e0b; }
+    .tag-CRON { color: #94a3b8; }
+    .tag-ERROR { color: var(--red); background: rgba(239, 68, 68, 0.15); }
+
+    .log-msg {
+      color: #e2e8f0;
+      flex: 1;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    footer {
+      padding: 10px 20px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px solid var(--border);
+      background: var(--card-bg);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <h1>🎟️ VeSKOnl System Logs</h1>
+      <div id="statusBadge" class="status-badge">
+        <span class="dot"></span>
+        <span id="statusText">ĐANG KẾT NỐI...</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn" id="btnToggleScroll" onclick="toggleAutoScroll()">
+        ⬇️ Tự động cuộn: <strong id="scrollState">BẬT</strong>
+      </button>
+      <button class="btn" onclick="clearLogs()">🧹 Xóa màn hình</button>
+      <button class="btn" onclick="copyAllLogs()">📋 Sao chép</button>
+      <button class="btn" onclick="sendTestLog()" style="background:#0369a1; border-color:#0284c7; color:#fff;">⚡ Test Ping</button>
+    </div>
+  </header>
+
+  <div class="controls-bar">
+    <div class="filter-pills" id="categoryFilters">
+      <div class="pill active" data-cat="ALL" onclick="setCategoryFilter('ALL')">Tất cả (<span id="countAll">0</span>)</div>
+      <div class="pill" data-cat="HTTP" onclick="setCategoryFilter('HTTP')">HTTP (<span id="countHTTP">0</span>)</div>
+      <div class="pill" data-cat="HOLD" onclick="setCategoryFilter('HOLD')">Giữ Ghế (<span id="countHOLD">0</span>)</div>
+      <div class="pill" data-cat="PAYMENT" onclick="setCategoryFilter('PAYMENT')">Thanh Toán (<span id="countPAYMENT">0</span>)</div>
+      <div class="pill" data-cat="RELEASE" onclick="setCategoryFilter('RELEASE')">Nhả Ghế (<span id="countRELEASE">0</span>)</div>
+      <div class="pill" data-cat="CRON" onclick="setCategoryFilter('CRON')">Auto Cron (<span id="countCRON">0</span>)</div>
+      <div class="pill" data-cat="ERROR" onclick="setCategoryFilter('ERROR')">Lỗi (<span id="countERROR">0</span>)</div>
+    </div>
+
+    <div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInput" class="search-input" placeholder="Tìm theo ID ghế, email, mã đơn..." oninput="handleSearch()">
+    </div>
+  </div>
+
+  <main>
+    <div class="terminal-container">
+      <div class="terminal-header">
+        <div class="window-dots">
+          <span class="w-dot w-red"></span>
+          <span class="w-dot w-yellow"></span>
+          <span class="w-dot w-green"></span>
+        </div>
+        <div>bash - live-stream@sell-ticket-be-demo</div>
+        <div id="logStats">0 dòng</div>
+      </div>
+      <ul id="logList">
+        <li class="empty-state">Đang đợi các sự kiện đầu tiên từ hệ thống...</li>
+      </ul>
+    </div>
+  </main>
+
+  <footer>
+    <div>Server: <a href="https://sell-ticket-be-demo.onrender.com" target="_blank" style="color:#38bdf8; text-decoration:none;">https://sell-ticket-be-demo.onrender.com</a></div>
+    <div>Cập nhật thời gian thực qua Server-Sent Events (SSE)</div>
+  </footer>
+
+  <script>
+    let allLogs = [];
+    let currentCategory = 'ALL';
+    let searchQuery = '';
+    let autoScroll = true;
+    let eventSource = null;
+
+    const counts = {
+      ALL: 0, HTTP: 0, HOLD: 0, PAYMENT: 0, RELEASE: 0, CRON: 0, ERROR: 0
+    };
+
+    function connectSSE() {
+      const statusBadge = document.getElementById('statusBadge');
+      const statusText = document.getElementById('statusText');
+
+      // Tự động nhận URL server (chạy trực tiếp trên backend hoặc local)
+      const streamUrl = window.location.origin + '/api/logs/stream';
+      eventSource = new EventSource(streamUrl);
+
+      eventSource.onopen = () => {
+        statusBadge.className = 'status-badge';
+        statusText.innerText = 'TRỰC TIẾP (LIVE)';
+      };
+
+      eventSource.onmessage = (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.type === 'INIT' && Array.isArray(payload.logs)) {
+            allLogs = payload.logs;
+            recalculateCounts();
+            renderLogs();
+          } else if (payload.type === 'LOG' && payload.log) {
+            appendSingleLog(payload.log);
+          }
+        } catch (err) {
+          console.error('Lỗi phân tích JSON log:', err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        statusBadge.className = 'status-badge disconnected';
+        statusText.innerText = 'MẤT KẾT NỐI (Đang thử lại...)';
+      };
+    }
+
+    function recalculateCounts() {
+      Object.keys(counts).forEach(k => counts[k] = 0);
+      counts.ALL = allLogs.length;
+      allLogs.forEach(l => {
+        const cat = l.category || 'HTTP';
+        if (counts[cat] !== undefined) counts[cat]++;
+      });
+      updateCountUI();
+    }
+
+    function updateCountUI() {
+      document.getElementById('countAll').innerText = counts.ALL;
+      document.getElementById('countHTTP').innerText = counts.HTTP;
+      document.getElementById('countHOLD').innerText = counts.HOLD;
+      document.getElementById('countPAYMENT').innerText = counts.PAYMENT;
+      document.getElementById('countRELEASE').innerText = counts.RELEASE;
+      document.getElementById('countCRON').innerText = counts.CRON;
+      document.getElementById('countERROR').innerText = counts.ERROR;
+      document.getElementById('logStats').innerText = `${allLogs.length} dòng`;
+    }
+
+    function appendSingleLog(log) {
+      allLogs.push(log);
+      counts.ALL++;
+      const cat = log.category || 'HTTP';
+      if (counts[cat] !== undefined) counts[cat]++;
+      updateCountUI();
+
+      if (matchesFilter(log)) {
+        const list = document.getElementById('logList');
+        const emptyState = list.querySelector('.empty-state');
+        if (emptyState) emptyState.remove();
+
+        const row = createLogRow(log);
+        list.appendChild(row);
+
+        if (autoScroll) {
+          list.scrollTop = list.scrollHeight;
+        }
+      }
+    }
+
+    function matchesFilter(log) {
+      const matchCat = currentCategory === 'ALL' || log.category === currentCategory;
+      const matchSearch = !searchQuery || (log.raw || log.message || '').toLowerCase().includes(searchQuery.toLowerCase());
+      return matchCat && matchSearch;
+    }
+
+    function createLogRow(log) {
+      const li = document.createElement('li');
+      li.className = 'log-row';
+
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'log-time';
+      timeSpan.innerText = `[${log.time}]`;
+
+      const tagSpan = document.createElement('span');
+      tagSpan.className = `log-tag tag-${log.category}`;
+      tagSpan.innerText = `[${log.category}${log.subAction ? '_' + log.subAction : ''}]`;
+
+      const msgSpan = document.createElement('span');
+      msgSpan.className = 'log-msg';
+      msgSpan.innerText = log.message || log.raw || '';
+
+      li.appendChild(timeSpan);
+      li.appendChild(tagSpan);
+      li.appendChild(msgSpan);
+      return li;
+    }
+
+    function renderLogs() {
+      const list = document.getElementById('logList');
+      list.innerHTML = '';
+
+      const filtered = allLogs.filter(matchesFilter);
+      if (filtered.length === 0) {
+        list.innerHTML = '<li class="empty-state">Không có log nào phù hợp với bộ lọc hiện tại.</li>';
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      filtered.forEach(log => {
+        fragment.appendChild(createLogRow(log));
+      });
+      list.appendChild(fragment);
+
+      if (autoScroll) {
+        list.scrollTop = list.scrollHeight;
+      }
+    }
+
+    function setCategoryFilter(cat) {
+      currentCategory = cat;
+      document.querySelectorAll('#categoryFilters .pill').forEach(p => {
+        p.classList.toggle('active', p.getAttribute('data-cat') === cat);
+      });
+      renderLogs();
+    }
+
+    function handleSearch() {
+      searchQuery = document.getElementById('searchInput').value.trim();
+      renderLogs();
+    }
+
+    function toggleAutoScroll() {
+      autoScroll = !autoScroll;
+      document.getElementById('scrollState').innerText = autoScroll ? 'BẬT' : 'TẮT';
+      document.getElementById('btnToggleScroll').classList.toggle('active', autoScroll);
+    }
+
+    function clearLogs() {
+      allLogs = [];
+      recalculateCounts();
+      renderLogs();
+    }
+
+    function copyAllLogs() {
+      const text = allLogs.map(l => l.raw || `[${l.time}] [${l.category}] ${l.message}`).join('\n');
+      navigator.clipboard.writeText(text).then(() => {
+        alert(`Đã sao chép ${allLogs.length} dòng log vào bộ nhớ tạm!`);
+      });
+    }
+
+    async function sendTestLog() {
+      try {
+        await fetch('/api/events');
+      } catch (e) {}
+    }
+
+    // Bắt đầu kết nối khi trang tải xong
+    connectSSE();
+  </script>
+</body>
+</html>

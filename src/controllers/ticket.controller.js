@@ -1,57 +1,41 @@
 const ticketService = require('../services/ticket.service');
 const payos = require('../config/payos');
 const logger = require('../utils/logger');
+const {
+  EventListResponseDTO,
+  EventSeatsResponseDTO,
+  EventZonesResponseDTO,
+  ErrorResponseDTO: EventErrorDTO
+} = require('../dto/event.dto');
+const {
+  RequestSeatHoldDTO,
+  ConfirmPartialHoldDTO,
+  ReserveZoneDTO,
+  ReleaseSeatDTO,
+  SeatHoldSuccessResponseDTO,
+  PartialAvailabilityResponseDTO,
+  SeatHoldErrorResponseDTO,
+  ZoneReserveSuccessResponseDTO,
+  ReleaseSeatsResponseDTO,
+  ErrorResponseDTO: SeatErrorDTO
+} = require('../dto/seat.dto');
+const {
+  CheckoutRequestDTO,
+  CheckoutResponseDTO,
+  OrderHistoryResponseDTO,
+  ErrorResponseDTO: OrderErrorDTO
+} = require('../dto/order.dto');
 
-// Customer Service
+// ================== Event Endpoints ==================
+
 exports.getEvents = async (req, res) => {
   try {
     const events = await ticketService.getAllEvents();
-    res.json({ success: true, data: events });
+    const responseDto = new EventListResponseDTO(events);
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-exports.confirmPartialHold = async (req, res) => {
-  try {
-    const { confirmSeatIds } = req.body;
-
-    // Validate danh sách ghế gửi lên
-    if (!confirmSeatIds || !Array.isArray(confirmSeatIds) || confirmSeatIds.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Danh sách confirmSeatIds không hợp lệ.' 
-      });
-    }
-
-    // Gọi Service xử lý
-    const result = await ticketService.confirmPartialHold(req.user.id, confirmSeatIds);
-
-    if (result.success) {
-      return res.status(200).json({
-        success: true,
-        code: result.code,
-        message: 'Đã xác nhận giữ các ghế còn lại thành công.',
-        data: {
-          seatIds: result.reservedSeats.map(s => s.id),
-          reserved_until: result.reservedUntil,
-          seats: result.reservedSeats
-        }
-      });
-    }
-
-    // Lỗi khi bị cướp ghế hoặc hết hạn trong lúc suy nghĩ
-    return res.status(400).json({
-      success: false,
-      code: result.code,
-      message: result.message
-    });
-
-  } catch (err) {
-    return res.status(500).json({ 
-      success: false, 
-      message: err.message || 'Lỗi hệ thống khi xác nhận giữ chỗ.' 
-    });
+    const errorDto = new EventErrorDTO(err.message);
+    res.status(500).json(errorDto.toJSON());
   }
 };
 
@@ -59,156 +43,176 @@ exports.getEventDetails = async (req, res) => {
   try {
     const { eventId } = req.params;
     const { type } = req.query;
+    
     if (type === 'ZONE_BASED') {
       const zones = await ticketService.getZonesByEvent(eventId);
-      return res.json({ success: true, data: zones });
+      const responseDto = new EventZonesResponseDTO(zones);
+      return res.json(responseDto.toJSON());
     } else {
       const seats = await ticketService.getSeatsByEvent(eventId);
-      return res.json({ success: true, data: seats });
+      const responseDto = new EventSeatsResponseDTO(seats);
+      return res.json(responseDto.toJSON());
     }
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    const errorDto = new EventErrorDTO(err.message);
+    res.status(500).json(errorDto.toJSON());
   }
 };
 
-
-const MAX_TICKETS = 4;
+// ================== Seat Booking Endpoints ==================
 
 exports.requestSeatHold = async (req, res) => {
   try {
-    const { seatIds } = req.body;
-
-    console.log("Nguười dùng gửi request giữ ghế")
+    // Request DTO: Validate input
+    const requestDto = new RequestSeatHoldDTO(req.body);
+    const validation = requestDto.validate();
     
-    // Validate danh sách ghế gửi lên
-    if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Danh sách seatIds không hợp lệ.' 
-      });
+    if (!validation.isValid) {
+      const errorDto = new SeatErrorDTO(validation.errors.join(' '));
+      return res.status(400).json(errorDto.toJSON());
     }
 
-    if (seatIds.length > MAX_TICKETS) {
-      return {
-        success: false,
-        code: 'EXCEEDED_MAX_SEATS',
-        message: `Bạn chỉ được chọn tối đa ${MAX_SEATS_PER_USER} ghế cho mỗi tài khoản.`,
-      };
-    }
-
-    // Gọi Service xử lý
+    // Call service
+    const { seatIds } = requestDto.toServiceInput();
     const result = await ticketService.requestSeatHold(req.user.id, seatIds);
+    console.log(result)
 
-    // Trường hợp 1: Giữ thành công 100% số ghế
+    // Response DTO: Format output based on result
     if (result.success) {
-      return res.status(200).json({
-        success: true,
-        code: result.code,
-        message: 'Đã giữ chỗ thành công.',
-        data: {
-          seatIds: result.reservedSeats.map(s => s.id),
-          reserved_until: result.reservedUntil,
-          seats: result.reservedSeats
-        }
-      });
+      const responseDto = new SeatHoldSuccessResponseDTO(result);
+      return res.status(200).json(responseDto.toJSON());
     }
 
-    // Trường hợp 2: Chỉ khả dụng một phần (PARTIAL_AVAILABILITY)
     if (result.code === 'PARTIAL_AVAILABILITY') {
-      return res.status(200).json({
-        success: false,
-        code: result.code,
-        message: result.message,
-        unavailableSeats: result.unavailableSeats,
-        availableSeats: result.availableSeats,
-        availableSeatIds: result.availableSeatIds
-      });
+      const responseDto = new PartialAvailabilityResponseDTO(result);
+      return res.status(200).json(responseDto.toJSON());
     }
 
-    // Trường hợp 3: Bị lỗi nghiệp vụ khác (VD: User đang có hold active, hoặc tất cả ghế đã bị đặt)
-    return res.status(400).json({
-      success: false,
-      code: result.code,
-      message: result.message
-    });
+    const errorDto = new SeatHoldErrorResponseDTO(result.code, result.message);
+    return res.status(400).json(errorDto.toJSON());
 
   } catch (err) {
-    return res.status(500).json({ 
-      success: false, 
-      message: err.message || 'Lỗi hệ thống khi giữ chỗ.' 
-    });
+    const errorDto = new SeatErrorDTO(err.message || 'Lỗi hệ thống khi giữ chỗ.');
+    return res.status(500).json(errorDto.toJSON());
   }
 };
 
+exports.confirmPartialHold = async (req, res) => {
+  try {
+    // Request DTO: Validate input
+    const requestDto = new ConfirmPartialHoldDTO(req.body);
+    const validation = requestDto.validate();
+    
+    if (!validation.isValid) {
+      const errorDto = new SeatErrorDTO(validation.errors.join(' '));
+      return res.status(400).json(errorDto.toJSON());
+    }
+
+    // Call service
+    const { confirmSeatIds } = requestDto.toServiceInput();
+    const result = await ticketService.confirmPartialHold(req.user.id, confirmSeatIds);
+
+    // Response DTO: Format output
+    if (result.success) {
+      const responseDto = new SeatHoldSuccessResponseDTO(result);
+      return res.status(200).json(responseDto.toJSON());
+    }
+
+    const errorDto = new SeatHoldErrorResponseDTO(result.code, result.message);
+    return res.status(400).json(errorDto.toJSON());
+
+  } catch (err) {
+    const errorDto = new SeatErrorDTO(err.message || 'Lỗi hệ thống khi xác nhận giữ chỗ.');
+    return res.status(500).json(errorDto.toJSON());
+  }
+};
 
 exports.reserveZone = async (req, res) => {
   try {
-    const { eventId, zones } = req.body; 
-
-    if (!eventId || !zones || !Array.isArray(zones) || zones.length === 0) {
-      return res.status(400).json({ success: false, message: 'Dữ liệu chọn khu vực không hợp lệ.' });
+    // Request DTO: Validate input
+    const requestDto = new ReserveZoneDTO(req.body);
+    const validation = requestDto.validate();
+    
+    if (!validation.isValid) {
+      const errorDto = new SeatErrorDTO(validation.errors.join(' '));
+      return res.status(400).json(errorDto.toJSON());
     }
 
-    // Tính tổng số vé yêu cầu trên tất cả các zone
+    // Call service
+    const { eventId, zones } = requestDto.toServiceInput();
     const totalRequested = zones.reduce((sum, z) => sum + (Number(z.quantity) || 0), 0);
-
-    if (totalRequested <= 0) {
-      return res.status(400).json({ success: false, message: 'Vui lòng chọn ít nhất 1 vé.' });
-    }
-
-    // Kiểm tra giới hạn MAX_TICKETS 
-    if (totalRequested > MAX_TICKETS) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Tổng số vé các khu vực cộng lại không được vượt quá ${MAX_TICKETS} vé.` 
-      });
-    }
-
     const result = await ticketService.reserveSeatsByMultipleZones(req.user.id, eventId, zones);
-    res.json({ 
-      success: true, 
-      message: `Đã giữ thành công tổng cộng ${totalRequested} vé!`, 
-      data: result 
-    });
+    
+    // Response DTO: Format output
+    const responseDto = new ZoneReserveSuccessResponseDTO(result, totalRequested);
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    const errorDto = new SeatErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
   }
 };
 
 exports.releaseSeats = async (req, res) => {
   try {
-    const { seatIds } = req.body;
-    if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'Danh sách seatIds không hợp lệ.' });
+    // Request DTO: Validate input
+    const requestDto = new ReleaseSeatDTO(req.body);
+    const validation = requestDto.validate();
+    
+    if (!validation.isValid) {
+      const errorDto = new SeatErrorDTO(validation.errors.join(' '));
+      return res.status(400).json(errorDto.toJSON());
     }
+
+    // Call service
+    const { seatIds } = requestDto.toServiceInput();
     const released = await ticketService.releaseReservedSeats(req.user.id, seatIds);
-    res.json({ success: true, message: 'Đã hủy giữ chỗ thành công.', data: released });
+    
+    // Response DTO: Format output
+    const responseDto = new ReleaseSeatsResponseDTO(released);
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    const errorDto = new SeatErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
   }
 };
+
+// ================== Order & Payment Endpoints ==================
 
 exports.getMyOrders = async (req, res) => {
   try {
     const orders = await ticketService.getUserOrderHistory(req.user.id);
-    res.json({ success: true, data: orders });
+    const responseDto = new OrderHistoryResponseDTO(orders);
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    const errorDto = new OrderErrorDTO(err.message);
+    res.status(500).json(errorDto.toJSON());
   }
 };
 
-// Bấm nút thanh toán -> Tạo đơn và lấy Checkout URL từ PayOS
 exports.startCheckout = async (req, res) => {
   try {
-    const { seatIds, returnUrl, cancelUrl } = req.body;
+    // Request DTO: Validate input
+    const requestDto = new CheckoutRequestDTO(req.body);
+    const validation = requestDto.validate();
+    
+    if (!validation.isValid) {
+      const errorDto = new OrderErrorDTO(validation.errors.join(' '));
+      return res.status(400).json(errorDto.toJSON());
+    }
+
+    // Call service
+    const { seatIds, returnUrl, cancelUrl } = requestDto.toServiceInput();
     const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl);
-    res.json({ success: true, message: 'Khởi tạo thanh toán PayOS thành công!', data: result });
+    
+    // Response DTO: Format output
+    const responseDto = new CheckoutResponseDTO(result);
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    const errorDto = new OrderErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
   }
 };
 
-// Webhook nhận thông báo tự động từ PayOS
 exports.payosWebhook = async (req, res) => {
   try {
     const webhookData = req.body;
@@ -217,57 +221,81 @@ exports.payosWebhook = async (req, res) => {
     let verifiedData = webhookData.data || webhookData;
     try {
       if (typeof payos.webhooks?.verify === 'function') {
-        verifiedData = payos.webhooks.verify(webhookData);
+        verifiedData = await payos.webhooks.verify(webhookData);
       }
     } catch (verifyErr) {
-      logger.payment('WARN', `Cảnh báo xác thực checksum PayOS: ${verifyErr.message}`);
+      logger.payment('WARN', `Bỏ qua xác thực chữ ký (có thể là ping test): ${verifyErr.message}`);
+      verifiedData = webhookData.data || webhookData;
     }
 
-    const orderCode = verifiedData.orderCode || (webhookData.data && webhookData.data.orderCode) || webhookData.orderCode;
-    const isSuccess = webhookData.code === '00' || (webhookData.data && webhookData.data.code === '00') || verifiedData.code === '00' || webhookData.success === true;
+    const orderCode = verifiedData?.orderCode || webhookData?.data?.orderCode || webhookData?.orderCode;
+    const isSuccess = webhookData?.code === '00' || webhookData?.data?.code === '00' || verifiedData?.code === '00' || webhookData?.success === true;
 
     if (orderCode) {
       await ticketService.handlePaymentWebhook(orderCode, isSuccess);
       logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${isSuccess ? 'SUCCESS (SOLD)' : 'FAILED'}`);
     }
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       message: 'Đã nhận webhook thành công'
     });
   } catch (err) {
     logger.error('PAYOS_WEBHOOK', err.message, err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(200).json({ success: true, message: 'Đã nhận webhook (fallback)' });
   }
 };
 
-// Webhook giả lập (để kiểm thử thủ công nếu cần)
 exports.webhook = async (req, res) => {
   try {
     const result = await ticketService.handlePaymentWebhook(req.body.orderId || req.body.orderCode, Boolean(req.body.success));
     res.json({ success: true, data: result });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    const errorDto = new OrderErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
   }
 };
 
-// Admin  Service
+// ================== Admin Endpoints ==================
+
+const {
+  CreateEventRequestDTO,
+  CreateEventResponseDTO,
+  DeleteEventResponseDTO,
+  ErrorResponseDTO: AdminErrorDTO
+} = require('../dto/admin.dto');
+
 exports.createEvent = async (req, res) => {
   try {
-    const event = await ticketService.createEventWithConfig(req.body);
-    res.json({ success: true, message: 'Tạo sự kiện và cấu hình ghế thành công!', data: event });
+    // Request DTO: Validate input
+    const requestDto = new CreateEventRequestDTO(req.body);
+    const validation = requestDto.validate();
+    
+    if (!validation.isValid) {
+      const errorDto = new AdminErrorDTO(validation.errors.join(' '));
+      return res.status(400).json(errorDto.toJSON());
+    }
+
+    // Call service
+    const eventData = requestDto.toServiceInput();
+    const event = await ticketService.createEventWithConfig(eventData);
+    
+    // Response DTO: Format output
+    const responseDto = new CreateEventResponseDTO(event);
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    const errorDto = new AdminErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
   }
 };
 
 exports.deleteEvent = async (req, res) => {
   try {
     await ticketService.deleteEvent(req.params.eventId);
-    res.json({ success: true, message: 'Đã xóa sự kiện thành công.' });
+    const responseDto = new DeleteEventResponseDTO();
+    res.json(responseDto.toJSON());
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    const errorDto = new AdminErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
   }
 };
-
-
