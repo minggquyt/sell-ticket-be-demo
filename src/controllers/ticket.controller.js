@@ -217,13 +217,22 @@ exports.payosWebhook = async (req, res) => {
   try {
     const webhookData = req.body;
     logger.payment('WEBHOOK', `Nhận Webhook từ PayOS: ${JSON.stringify(webhookData)}`);
+    // DEBUG TẠM: xem PayOS gửi gì, lúc nào (xóa sau khi test xong)
+    console.log('\n===== [PAYOS-WEBHOOK-DEBUG] =====');
+    console.log('time   :', new Date().toISOString());
+    console.log('method :', req.method, req.originalUrl);
+    console.log('ip     :', req.headers['x-forwarded-for'] || req.socket.remoteAddress);
+    console.log('headers:', JSON.stringify(req.headers));
+    console.log('body   :', JSON.stringify(webhookData, null, 2));
 
     let verifiedData = webhookData.data || webhookData;
     try {
       if (typeof payos.webhooks?.verify === 'function') {
         verifiedData = await payos.webhooks.verify(webhookData);
+        console.log('[PAYOS-WEBHOOK-DEBUG] verify: HỢP LỆ (chữ ký đúng)');
       }
     } catch (verifyErr) {
+      console.log('[PAYOS-WEBHOOK-DEBUG] verify: KHÔNG HỢP LỆ ->', verifyErr.message);
       logger.payment('WARN', `Bỏ qua xác thực chữ ký (có thể là ping test): ${verifyErr.message}`);
       verifiedData = webhookData.data || webhookData;
     }

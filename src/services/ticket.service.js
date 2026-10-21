@@ -368,6 +368,8 @@ class TicketService {
           cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=cancel`,
         };
         const paymentLink = await payos.paymentRequests.create(payosOrder);
+        // DEBUG TẠM: xem PayOS trả gì khi tạo link (xóa sau khi test xong)
+        console.log('[PAYOS-CREATE-DEBUG]', new Date().toISOString(), JSON.stringify(payosOrder), '=>', JSON.stringify(paymentLink));
         checkoutUrl = paymentLink.checkoutUrl;
       } catch (payErr) {
         logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`);
