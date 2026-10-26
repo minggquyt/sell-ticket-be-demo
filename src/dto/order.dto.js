@@ -40,8 +40,7 @@ class CheckoutResponseDTO {
     this.success = true;
     this.message = 'Khởi tạo thanh toán PayOS thành công!';
     this.data = {
-      orderId: result.orderId,
-      orderCode: result.orderCode,
+      orderCode: Number(result.orderCode),
       checkoutUrl: result.checkoutUrl,
       totalAmount: result.totalAmount,
       paymentTimeout: result.paymentTimeout
@@ -75,7 +74,7 @@ class OrderItemDTO {
 
 class OrderHistoryItemDTO {
   constructor(order) {
-    this.orderId = order.order_id;
+    this.orderCode = Number(order.order_code);
     this.totalAmount = order.total_amount;
     this.orderStatus = order.order_status;
     this.createdAt = order.created_at;
@@ -87,7 +86,7 @@ class OrderHistoryItemDTO {
 
   toJSON() {
     return {
-      orderId: this.orderId,
+      orderCode: this.orderCode,
       totalAmount: this.totalAmount,
       orderStatus: this.orderStatus,
       createdAt: this.createdAt,

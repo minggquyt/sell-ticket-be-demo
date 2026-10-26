@@ -68,7 +68,7 @@ class SeatDetailDTO {
     this.status = seat.status;
     this.reserved_by = seat.reserved_by;
     this.reserved_until = seat.reserved_until;
-    this.current_order_id = seat.current_order_id;
+    this.current_order_code = seat.current_order_code ? Number(seat.current_order_code) : null;
   }
 
   toJSON() {
@@ -81,7 +81,7 @@ class SeatDetailDTO {
       status: this.status,
       reserved_by: this.reserved_by,
       reserved_until: this.reserved_until,
-      current_order_id: this.current_order_id
+      current_order_code: this.current_order_code
     };
   }
 }

@@ -87,14 +87,14 @@ async function processFullPayment(user, seatIds) {
       };
     }
 
-    const orderId = checkoutData.data.orderId;
+    const orderCode = checkoutData.data.orderCode;
     const totalAmount = checkoutData.data.totalAmount;
 
     // Bước 2: Giả lập Ngân hàng / Cổng thanh toán bắn Webhook xác nhận (SOLD)
     const webhookRes = await fetch(`${BASE_URL}/payment/webhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId, success: true })
+      body: JSON.stringify({ orderCode, success: true })
     });
     const webhookData = await webhookRes.json();
 
@@ -109,7 +109,7 @@ async function processFullPayment(user, seatIds) {
 
     return {
       success: true,
-      orderId,
+      orderCode,
       totalAmount,
       seatIds,
       duration: Date.now() - payStart // Thời gian từ lúc ấn thanh toán tới khi nhận vé thành công
@@ -136,7 +136,7 @@ async function runFullE2ETest() {
   const zoneEvent = evData.data.find(e => e.event_type === 'ZONE_BASED');
 
   if (!seatEvent || !zoneEvent) {
-    console.error('❌ Thiếu dữ liệu sự kiện! Vui lòng chạy seed: node src/seeds/seed-mvp.js');
+    console.error('❌ Thiếu dữ liệu sự kiện! Vui lòng chạy seed: node src/seeds/seed.js');
     process.exit(1);
   }
 
@@ -217,15 +217,15 @@ async function runFullE2ETest() {
   console.table(successfulOrdersCase1.map(o => ({
     'User ID': o.user.id,
     'Tên User': o.user.name,
-    'Order ID': o.payRes.orderId,
+    'Order Code': o.payRes.orderCode,
     'Ghế đã mua (SOLD)': o.seats,
     'Tổng tiền': Number(o.payRes.totalAmount).toLocaleString() + ' đ',
     'Thời gian TT': `${o.payRes.duration}ms`
   })));
 
   console.log('👉 Câu lệnh SQL kiểm tra trên Supabase:');
-  console.log(`SELECT id, seat_number, status, current_order_id FROM seats WHERE event_id = '${seatEvent.id}' AND status = 'SOLD';`);
-  console.log(`SELECT id, user_id, total_amount, status FROM orders WHERE status = 'SUCCESS';\n`);
+  console.log(`SELECT id, seat_number, status, current_order_code FROM seats WHERE event_id = '${seatEvent.id}' AND status = 'SOLD';`);
+  console.log(`SELECT order_code, user_id, total_amount, status FROM orders WHERE status = 'SUCCESS';\n`);
 
   // =========================================================================
   // GIAI ĐOẠN 2: ZONE-BASED EVENT (GIỮ VÉ -> THANH TOÁN MUA HẲN VÉ)

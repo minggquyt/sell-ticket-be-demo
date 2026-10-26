@@ -257,7 +257,7 @@ class ReleaseSeatsResponseDTO {
     this.data = released.map(seat => ({
       id: seat.id,
       seat_number: seat.seat_number,
-      current_order_id: seat.current_order_id
+      current_order_code: seat.current_order_code ? Number(seat.current_order_code) : null
     }));
   }
 

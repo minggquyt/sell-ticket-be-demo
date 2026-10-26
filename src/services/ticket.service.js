@@ -7,19 +7,6 @@ const {
   PAYMENT_TIMEOUT_MINUTES,
 } = require('../config/constants');
 
-// Khai báo Map lưu vết các ghế đang tạm giữ trong RAM Node.js: seatId -> expiredAt (timestamp)
-const localReservedSeats = new Map();
-
-// Định kỳ dọn dẹp các ghế đã hết hạn trong RAM (mỗi 10 giây chạy 1 lần để tránh rò rỉ bộ nhớ)
-setInterval(() => {
-  const currentTime = Date.now();
-  for (const [seatId, expiredAt] of localReservedSeats.entries()) {
-    if (expiredAt <= currentTime) {
-      localReservedSeats.delete(seatId);
-    }
-  }
-}, 10 * 1000);
-
 class TicketService {
   // Customer Functions
   async getUserOrderHistory(userId) {
@@ -34,7 +21,6 @@ class TicketService {
     await ticketRepository.releaseExpiredSeats();
     return await ticketRepository.getSeatsByEvent(eventId);
   }
-
 
   async getZonesByEvent(eventId) {
     await ticketRepository.releaseExpiredSeats();
@@ -293,24 +279,30 @@ class TicketService {
       await client.query('BEGIN');
 
       const result = await client.query(`
-        UPDATE seats 
-        SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL
-        WHERE id = ANY($1::uuid[]) 
-          AND reserved_by = $2 
-          AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
-        RETURNING id, seat_number, current_order_id;
+        WITH target_seats AS (
+          SELECT id, current_order_code
+          FROM seats
+          WHERE id = ANY($1::uuid[])
+            AND reserved_by = $2
+            AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
+          FOR UPDATE
+        )
+        UPDATE seats s
+        SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
+        FROM target_seats ts
+        WHERE s.id = ts.id
+        RETURNING s.id, s.seat_number, ts.current_order_code;
       `, [seatIds, userId]);
 
-      const orderIds = [...new Set(result.rows.map(r => r.current_order_id).filter(Boolean))];
-      if (orderIds.length > 0) {
-        await client.query(`UPDATE orders SET status = 'CANCELLED' WHERE id = ANY($1::uuid[]);`, [orderIds]);
+      const orderCodes = [...new Set(result.rows.map(r => r.current_order_code).filter(Boolean))];
+      if (orderCodes.length > 0) {
+        await client.query(
+          `UPDATE orders SET status = 'CANCELLED' WHERE order_code = ANY($1::bigint[]) AND status = 'PAYMENT_PROCESSING';`,
+          [orderCodes]
+        );
       }
 
       await client.query('COMMIT');
-
-      for (const row of result.rows) {
-        localReservedSeats.delete(row.id);
-      }
 
       logger.release(`User ${userId} đã hủy/nhả ${result.rows.length} ghế [${result.rows.map(r => r.seat_number).join(', ')}] về AVAILABLE`);
 
@@ -329,10 +321,15 @@ class TicketService {
     try {
       await client.query('BEGIN');
 
+      const uniqueSeatIds = [...new Set(seatIds)];
       const seatRes = await client.query(
         `SELECT * FROM seats WHERE id = ANY($1::uuid[]) ORDER BY id ASC FOR UPDATE;`,
-        [seatIds]
+        [uniqueSeatIds]
       );
+
+      if (seatRes.rows.length !== uniqueSeatIds.length) {
+        throw new Error('Một hoặc nhiều ghế bạn chọn không tồn tại.');
+      }
 
       const now = new Date();
       let total = 0;
@@ -344,32 +341,29 @@ class TicketService {
       }
 
       const paymentTimeout = new Date(Date.now() + PAYMENT_TIMEOUT_MINUTES * 60 * 1000);
-      const orderCode = Number(String(Date.now()).slice(-6) + Math.floor(Math.random() * 90 + 10));
-      
-      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, orderCode, client);
+      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, client);
+      const orderCode = Number(order.order_code);
 
       for (const s of seatRes.rows) {
-        await ticketRepository.createOrderItem(order.id, s.id, s.price, client);
+        await ticketRepository.createOrderItem(orderCode, s.id, s.price, client);
       }
 
       await client.query(`
         UPDATE seats 
-        SET status = 'PAYMENT_PROCESSING', reserved_until = $1, current_order_id = $2 
+        SET status = 'PAYMENT_PROCESSING', reserved_until = $1, current_order_code = $2 
         WHERE id = ANY($3::uuid[]);
-      `, [paymentTimeout, order.id, seatIds]);
+      `, [paymentTimeout, orderCode, uniqueSeatIds]);
 
       let checkoutUrl = null;
       try {
         const payosOrder = {
-          orderCode: orderCode,
+          orderCode,
           amount: Number(total),
           description: `VE SU KIEN ${orderCode}`.slice(0, 25),
-          returnUrl: returnUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=success`,
-          cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderId=${order.id}&status=cancel`,
+          returnUrl: returnUrl || `http://127.0.0.1:5500/index.html?orderCode=${orderCode}&status=success`,
+          cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderCode=${orderCode}&status=cancel`,
         };
         const paymentLink = await payos.paymentRequests.create(payosOrder);
-        // DEBUG TẠM: xem PayOS trả gì khi tạo link (xóa sau khi test xong)
-        console.log('[PAYOS-CREATE-DEBUG]', new Date().toISOString(), JSON.stringify(payosOrder), '=>', JSON.stringify(paymentLink));
         checkoutUrl = paymentLink.checkoutUrl;
       } catch (payErr) {
         logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`);
@@ -378,19 +372,13 @@ class TicketService {
 
       await client.query('COMMIT');
 
-      const newTimeoutMs = paymentTimeout.getTime();
-      for (const seatId of seatIds) {
-        localReservedSeats.set(seatId, newTimeoutMs);
-      }
-
       logger.payment('START', `User ${userId} tạo đơn #${orderCode} | ${seatRes.rows.length} ghế | Tổng tiền: ${total.toLocaleString()}đ`);
 
       return { 
-        orderId: order.id, 
-        orderCode: orderCode, 
-        checkoutUrl: checkoutUrl, 
+        orderCode, 
+        checkoutUrl, 
         totalAmount: total, 
-        paymentTimeout: paymentTimeout 
+        paymentTimeout 
       };
     } catch (err) {
       await client.query('ROLLBACK');
@@ -401,64 +389,66 @@ class TicketService {
     }
   }
 
-  async handlePaymentWebhook(orderIdentifier, isSuccess) {
+  async handlePaymentWebhook(orderCode, isSuccess) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      
+
+      const numericOrderCode = Number(orderCode);
+      if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
+        await client.query('ROLLBACK');
+        logger.payment('WARN', `Mã đơn hàng không hợp lệ từ webhook: ${orderCode}`);
+        return { success: true, message: 'Mã đơn hàng không hợp lệ.' };
+      }
+
       const orderRes = await client.query(
-        `SELECT * FROM orders WHERE (id::text = $1 OR order_code::text = $1) FOR UPDATE;`,
-        [String(orderIdentifier)]
+        `SELECT * FROM orders WHERE order_code = $1 FOR UPDATE;`,
+        [numericOrderCode]
       );
       
       if (orderRes.rows.length === 0) {
         await client.query('ROLLBACK');
-        logger.payment('WARN', `Không tìm thấy đơn hàng #${orderIdentifier} (có thể là ping test từ PayOS)`);
+        logger.payment('WARN', `Không tìm thấy đơn hàng #${numericOrderCode} (có thể là ping test từ PayOS)`);
         return { success: true, message: 'Đơn hàng không tồn tại hoặc là ping test từ cổng thanh toán.' };
       }
       
       const order = orderRes.rows[0];
-      const orderId = order.id;
 
       if (order.status === 'SUCCESS' && isSuccess) {
         await client.query('COMMIT');
-        logger.payment('INFO', `Đơn #${order.order_code || orderId} đã ở trạng thái SUCCESS từ trước.`);
+        logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái SUCCESS từ trước.`);
         return { success: true, message: 'Đơn hàng đã được xử lý trước đó.' };
       }
 
       let updatedSeats = [];
 
       if (isSuccess) {
-        await ticketRepository.updateOrderStatus(orderId, 'SUCCESS', client);
+        await ticketRepository.updateOrderStatus(numericOrderCode, 'SUCCESS', client);
 
         const seatRes = await client.query(`
           UPDATE seats 
-          SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
-          WHERE current_order_id = $1
+          SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
+          WHERE current_order_code = $1
           RETURNING id, seat_number;
-        `, [orderId]);
+        `, [numericOrderCode]);
         updatedSeats = seatRes.rows;
-        logger.payment('SUCCESS', `Đơn #${order.order_code || orderId} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
+        logger.payment('SUCCESS', `Đơn #${numericOrderCode} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
       } else {
-        await ticketRepository.updateOrderStatus(orderId, 'FAILED', client);
+        await ticketRepository.updateOrderStatus(numericOrderCode, 'FAILED', client);
 
         const seatRes = await client.query(`
           UPDATE seats 
-          SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_id = NULL 
-          WHERE current_order_id = $1
+          SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
+          WHERE current_order_code = $1
           RETURNING id, seat_number;
-        `, [orderId]);
+        `, [numericOrderCode]);
         updatedSeats = seatRes.rows;
-        logger.payment('CANCEL', `Đơn #${order.order_code || orderId} THẤT BẠI/HỦY! ${updatedSeats.length} ghế về AVAILABLE`);
+        logger.payment('CANCEL', `Đơn #${numericOrderCode} THẤT BẠI/HỦY! ${updatedSeats.length} ghế về AVAILABLE`);
       }
 
       await client.query('COMMIT');
 
-      for (const seat of updatedSeats) {
-        localReservedSeats.delete(seat.id);
-      }
-
-      return { status: isSuccess ? 'SUCCESS' : 'FAILED', orderId: orderId, orderCode: order.order_code };
+      return { status: isSuccess ? 'SUCCESS' : 'FAILED', orderCode: numericOrderCode };
     } catch (err) {
       await client.query('ROLLBACK');
       logger.error('HANDLE_PAYMENT_WEBHOOK', err.message, err);
