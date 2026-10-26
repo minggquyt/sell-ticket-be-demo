@@ -4,7 +4,8 @@ const ticketRepository = require('../repositories/ticket.repository');
 const logger = require('../utils/logger');
 const {
   SEAT_HOLD_DURATION_SECONDS,
-  PAYMENT_TIMEOUT_MINUTES,
+  PAYMENT_TIMEOUT_SECONDS,
+  PAYMENT_GRACE_SECONDS,
 } = require('../config/constants');
 
 class TicketService {
@@ -304,6 +305,15 @@ class TicketService {
 
       await client.query('COMMIT');
 
+      for (const code of orderCodes) {
+        try {
+          await payos.paymentRequests.cancel(Number(code), 'User cancelled reservation');
+          logger.payment('CANCEL', `Đã hủy link PayOS cho đơn #${code}`);
+        } catch (cancelErr) {
+          logger.payment('WARN', `Không thể hủy link PayOS cho đơn #${code} (có thể đã hết hạn/hủy trước đó): ${cancelErr.message}`);
+        }
+      }
+
       logger.release(`User ${userId} đã hủy/nhả ${result.rows.length} ghế [${result.rows.map(r => r.seat_number).join(', ')}] về AVAILABLE`);
 
       return result.rows;
@@ -340,7 +350,11 @@ class TicketService {
         total += Number(seat.price);
       }
 
-      const paymentTimeout = new Date(Date.now() + PAYMENT_TIMEOUT_MINUTES * 60 * 1000);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const expiredAt = nowSec + PAYMENT_TIMEOUT_SECONDS;
+      const paymentTimeout = new Date(expiredAt * 1000);
+      const seatReservedUntil = new Date((expiredAt + PAYMENT_GRACE_SECONDS) * 1000);
+
       const order = await ticketRepository.createOrder(userId, total, paymentTimeout, client);
       const orderCode = Number(order.order_code);
 
@@ -352,7 +366,7 @@ class TicketService {
         UPDATE seats 
         SET status = 'PAYMENT_PROCESSING', reserved_until = $1, current_order_code = $2 
         WHERE id = ANY($3::uuid[]);
-      `, [paymentTimeout, orderCode, uniqueSeatIds]);
+      `, [seatReservedUntil, orderCode, uniqueSeatIds]);
 
       let checkoutUrl = null;
       try {
@@ -360,6 +374,7 @@ class TicketService {
           orderCode,
           amount: Number(total),
           description: `VE SU KIEN ${orderCode}`.slice(0, 25),
+          expiredAt,
           returnUrl: returnUrl || `http://127.0.0.1:5500/index.html?orderCode=${orderCode}&status=success`,
           cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderCode=${orderCode}&status=cancel`,
         };
@@ -372,13 +387,14 @@ class TicketService {
 
       await client.query('COMMIT');
 
-      logger.payment('START', `User ${userId} tạo đơn #${orderCode} | ${seatRes.rows.length} ghế | Tổng tiền: ${total.toLocaleString()}đ`);
+      logger.payment('START', `User ${userId} tạo đơn #${orderCode} | ${seatRes.rows.length} ghế | Tổng tiền: ${total.toLocaleString()}đ | Hết hạn sau ${PAYMENT_TIMEOUT_SECONDS}s`);
 
       return { 
         orderCode, 
         checkoutUrl, 
         totalAmount: total, 
-        paymentTimeout 
+        paymentTimeout,
+        expiredAt
       };
     } catch (err) {
       await client.query('ROLLBACK');
@@ -389,7 +405,7 @@ class TicketService {
     }
   }
 
-  async handlePaymentWebhook(orderCode, isSuccess) {
+  async handlePaymentWebhook(orderCode, isSuccess, paidAmount = null) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -417,23 +433,31 @@ class TicketService {
       if (order.status === 'SUCCESS' && isSuccess) {
         await client.query('COMMIT');
         logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái SUCCESS từ trước.`);
-        return { success: true, message: 'Đơn hàng đã được xử lý trước đó.' };
+        return { status: 'SUCCESS', orderCode: numericOrderCode };
+      }
+
+      // Kiểm tra khớp số tiền thanh toán nếu có paidAmount
+      let validSuccess = Boolean(isSuccess);
+      if (validSuccess && paidAmount !== null && Number(paidAmount) < Number(order.total_amount)) {
+        logger.payment('WARN', `Đơn #${numericOrderCode} thanh toán thiếu tiền: Nhận ${paidAmount} < Cần ${order.total_amount}`);
+        validSuccess = false;
       }
 
       let updatedSeats = [];
 
-      if (isSuccess) {
+      if (validSuccess) {
         await ticketRepository.updateOrderStatus(numericOrderCode, 'SUCCESS', client);
 
         const seatRes = await client.query(`
           UPDATE seats 
           SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
           WHERE current_order_code = $1
+             OR (id IN (SELECT seat_id FROM order_items WHERE order_code = $1) AND status IN ('PAYMENT_PROCESSING', 'RESERVED', 'AVAILABLE'))
           RETURNING id, seat_number;
         `, [numericOrderCode]);
         updatedSeats = seatRes.rows;
         logger.payment('SUCCESS', `Đơn #${numericOrderCode} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
-      } else {
+      } else if (order.status === 'PAYMENT_PROCESSING') {
         await ticketRepository.updateOrderStatus(numericOrderCode, 'FAILED', client);
 
         const seatRes = await client.query(`
@@ -448,7 +472,7 @@ class TicketService {
 
       await client.query('COMMIT');
 
-      return { status: isSuccess ? 'SUCCESS' : 'FAILED', orderCode: numericOrderCode };
+      return { status: validSuccess ? 'SUCCESS' : 'FAILED', orderCode: numericOrderCode };
     } catch (err) {
       await client.query('ROLLBACK');
       logger.error('HANDLE_PAYMENT_WEBHOOK', err.message, err);
@@ -456,6 +480,56 @@ class TicketService {
     } finally {
       client.release();
     }
+  }
+
+  async getOrderStatusAndSync(userId, orderCode) {
+    const numericOrderCode = Number(orderCode);
+    if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
+      throw new Error('Mã đơn hàng không hợp lệ.');
+    }
+
+    let order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+    if (!order || order.user_id !== userId) {
+      throw new Error('Không tìm thấy đơn hàng hoặc bạn không có quyền truy cập.');
+    }
+
+    if (order.order_status === 'PAYMENT_PROCESSING') {
+      try {
+        const paymentInfo = await payos.paymentRequests.get(numericOrderCode);
+        if (paymentInfo?.status === 'PAID') {
+          await this.handlePaymentWebhook(
+            numericOrderCode,
+            true,
+            paymentInfo.amountPaid || paymentInfo.amount
+          );
+          order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+        } else if (paymentInfo?.status === 'CANCELLED' || paymentInfo?.status === 'EXPIRED') {
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            await client.query(
+              `UPDATE orders SET status = $1 WHERE order_code = $2 AND status = 'PAYMENT_PROCESSING';`,
+              [paymentInfo.status, numericOrderCode]
+            );
+            await client.query(
+              `UPDATE seats SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL WHERE current_order_code = $1;`,
+              [numericOrderCode]
+            );
+            await client.query('COMMIT');
+          } catch (txErr) {
+            await client.query('ROLLBACK');
+            logger.error('SYNC_ORDER_STATUS', txErr.message, txErr);
+          } finally {
+            client.release();
+          }
+          order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+        }
+      } catch (err) {
+        logger.payment('WARN', `Không thể đồng bộ trạng thái đơn #${numericOrderCode} từ PayOS: ${err.message}`);
+      }
+    }
+
+    return order;
   }
 
   // Admin Functions

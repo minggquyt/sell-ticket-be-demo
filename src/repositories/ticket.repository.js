@@ -131,6 +131,40 @@ class TicketRepository {
     return result.rows;
   }
 
+  async getOrderWithItemsByCode(orderCode, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT 
+        o.order_code,
+        o.user_id,
+        o.total_amount,
+        o.status AS order_status,
+        o.expires_at,
+        o.created_at,
+        e.id AS event_id,
+        e.title AS event_title,
+        e.event_type,
+        e.location,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'seat_id', s.id,
+              'seat_number', s.seat_number,
+              'zone_name', s.zone_name,
+              'price', oi.price
+            ) ORDER BY s.seat_number ASC
+          ) FILTER (WHERE s.id IS NOT NULL), '[]'
+        ) AS items
+      FROM orders o
+      LEFT JOIN order_items oi ON o.order_code = oi.order_code
+      LEFT JOIN seats s ON oi.seat_id = s.id
+      LEFT JOIN events e ON s.event_id = e.id
+      WHERE o.order_code = $1
+      GROUP BY o.order_code, e.id;`,
+      [orderCode]
+    );
+    return result.rows[0] || null;
+  }
+
   async createOrder(userId, totalAmount, expiresAt, dbClient = pool) {
     const result = await dbClient.query(
       `INSERT INTO orders (user_id, total_amount, status, expires_at) 

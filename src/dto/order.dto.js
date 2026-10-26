@@ -43,7 +43,8 @@ class CheckoutResponseDTO {
       orderCode: Number(result.orderCode),
       checkoutUrl: result.checkoutUrl,
       totalAmount: result.totalAmount,
-      paymentTimeout: result.paymentTimeout
+      paymentTimeout: result.paymentTimeout,
+      expiredAt: result.expiredAt
     };
   }
 
@@ -58,13 +59,15 @@ class CheckoutResponseDTO {
 
 class OrderItemDTO {
   constructor(item) {
+    this.seatId = item.seat_id;
     this.seatNumber = item.seat_number;
     this.zoneName = item.zone_name;
-    this.price = item.price;
+    this.price = Number(item.price);
   }
 
   toJSON() {
     return {
+      ...(this.seatId ? { seatId: this.seatId } : {}),
       seatNumber: this.seatNumber,
       zoneName: this.zoneName,
       price: this.price
@@ -112,6 +115,31 @@ class OrderHistoryResponseDTO {
   }
 }
 
+class OrderStatusResponseDTO {
+  constructor(order) {
+    this.success = true;
+    this.data = {
+      orderCode: Number(order.order_code),
+      status: order.order_status,
+      totalAmount: Number(order.total_amount),
+      expiresAt: order.expires_at,
+      createdAt: order.created_at,
+      eventId: order.event_id,
+      eventTitle: order.event_title,
+      eventType: order.event_type,
+      location: order.location,
+      items: (order.items || []).map(item => new OrderItemDTO(item).toJSON())
+    };
+  }
+
+  toJSON() {
+    return {
+      success: this.success,
+      data: this.data
+    };
+  }
+}
+
 class ErrorResponseDTO {
   constructor(message) {
     this.success = false;
@@ -133,6 +161,7 @@ module.exports = {
   CheckoutResponseDTO,
   OrderHistoryResponseDTO,
   OrderHistoryItemDTO,
+  OrderStatusResponseDTO,
   OrderItemDTO,
   ErrorResponseDTO
 };

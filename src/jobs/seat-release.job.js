@@ -1,7 +1,7 @@
 const ticketRepository = require('../repositories/ticket.repository');
 const logger = require('../utils/logger');
 
-// Background Job: Quét ghế và đơn hàng hết hạn định kỳ mỗi 60 giây
+// Background Job: Quét ghế và đơn hàng hết hạn định kỳ mỗi 15 giây
 function startSeatReleaseJob() {
   setInterval(async () => {
     try {
@@ -14,7 +14,7 @@ function startSeatReleaseJob() {
     } catch (err) {
       logger.error('CRON_AUTO_RELEASE', err.message);
     }
-  }, 60 * 1000);
+  }, 15 * 1000);
 }
 
 module.exports = { startSeatReleaseJob };
