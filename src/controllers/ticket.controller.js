@@ -23,6 +23,7 @@ const {
   CheckoutRequestDTO,
   CheckoutResponseDTO,
   OrderHistoryResponseDTO,
+  OrderStatusResponseDTO,
   ErrorResponseDTO: OrderErrorDTO
 } = require('../dto/order.dto');
 
@@ -64,7 +65,6 @@ exports.getEventDetails = async (req, res) => {
 
 exports.requestSeatHold = async (req, res) => {
   try {
-    // Request DTO: Validate input
     const requestDto = new RequestSeatHoldDTO(req.body);
     const validation = requestDto.validate();
     
@@ -73,12 +73,9 @@ exports.requestSeatHold = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    // Call service
     const { seatIds } = requestDto.toServiceInput();
     const result = await ticketService.requestSeatHold(req.user.id, seatIds);
-    console.log(result)
 
-    // Response DTO: Format output based on result
     if (result.success) {
       const responseDto = new SeatHoldSuccessResponseDTO(result);
       return res.status(200).json(responseDto.toJSON());
@@ -100,7 +97,6 @@ exports.requestSeatHold = async (req, res) => {
 
 exports.confirmPartialHold = async (req, res) => {
   try {
-    // Request DTO: Validate input
     const requestDto = new ConfirmPartialHoldDTO(req.body);
     const validation = requestDto.validate();
     
@@ -109,11 +105,9 @@ exports.confirmPartialHold = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    // Call service
     const { confirmSeatIds } = requestDto.toServiceInput();
     const result = await ticketService.confirmPartialHold(req.user.id, confirmSeatIds);
 
-    // Response DTO: Format output
     if (result.success) {
       const responseDto = new SeatHoldSuccessResponseDTO(result);
       return res.status(200).json(responseDto.toJSON());
@@ -130,7 +124,6 @@ exports.confirmPartialHold = async (req, res) => {
 
 exports.reserveZone = async (req, res) => {
   try {
-    // Request DTO: Validate input
     const requestDto = new ReserveZoneDTO(req.body);
     const validation = requestDto.validate();
     
@@ -139,12 +132,10 @@ exports.reserveZone = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    // Call service
     const { eventId, zones } = requestDto.toServiceInput();
     const totalRequested = zones.reduce((sum, z) => sum + (Number(z.quantity) || 0), 0);
     const result = await ticketService.reserveSeatsByMultipleZones(req.user.id, eventId, zones);
     
-    // Response DTO: Format output
     const responseDto = new ZoneReserveSuccessResponseDTO(result, totalRequested);
     res.json(responseDto.toJSON());
   } catch (err) {
@@ -155,7 +146,6 @@ exports.reserveZone = async (req, res) => {
 
 exports.releaseSeats = async (req, res) => {
   try {
-    // Request DTO: Validate input
     const requestDto = new ReleaseSeatDTO(req.body);
     const validation = requestDto.validate();
     
@@ -164,16 +154,24 @@ exports.releaseSeats = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    // Call service
-    const { seatIds } = requestDto.toServiceInput();
-    const released = await ticketService.releaseReservedSeats(req.user.id, seatIds);
+    const { seatIds, orderCode } = requestDto.toServiceInput();
+    const released = await ticketService.releaseReservedSeats(req.user.id, seatIds, orderCode);
     
-    // Response DTO: Format output
     const responseDto = new ReleaseSeatsResponseDTO(released);
     res.json(responseDto.toJSON());
   } catch (err) {
     const errorDto = new SeatErrorDTO(err.message);
     res.status(400).json(errorDto.toJSON());
+  }
+};
+
+exports.cancelOrder = async (req, res) => {
+  try {
+    const result = await ticketService.cancelOrder(req.user.id, req.params.orderCode);
+    return res.json({ success: true, message: 'Đã hủy đơn hàng thành công.', data: result });
+  } catch (err) {
+    const errorDto = new OrderErrorDTO(err.message);
+    return res.status(400).json(errorDto.toJSON());
   }
 };
 
@@ -190,9 +188,19 @@ exports.getMyOrders = async (req, res) => {
   }
 };
 
+exports.getOrderStatus = async (req, res) => {
+  try {
+    const order = await ticketService.getOrderStatusAndSync(req.user.id, req.params.orderCode);
+    const responseDto = new OrderStatusResponseDTO(order);
+    return res.json(responseDto.toJSON());
+  } catch (err) {
+    const errorDto = new OrderErrorDTO(err.message);
+    return res.status(404).json(errorDto.toJSON());
+  }
+};
+
 exports.startCheckout = async (req, res) => {
   try {
-    // Request DTO: Validate input
     const requestDto = new CheckoutRequestDTO(req.body);
     const validation = requestDto.validate();
     
@@ -201,11 +209,9 @@ exports.startCheckout = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    // Call service
     const { seatIds, returnUrl, cancelUrl } = requestDto.toServiceInput();
     const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl);
     
-    // Response DTO: Format output
     const responseDto = new CheckoutResponseDTO(result);
     res.json(responseDto.toJSON());
   } catch (err) {
@@ -219,41 +225,33 @@ exports.payosWebhook = async (req, res) => {
     const webhookData = req.body;
     logger.payment('WEBHOOK', `Nhận Webhook từ PayOS: ${JSON.stringify(webhookData)}`);
 
-    let verifiedData = webhookData.data || webhookData;
+    let verifiedData;
     try {
-      if (typeof payos.webhooks?.verify === 'function') {
-        verifiedData = await payos.webhooks.verify(webhookData);
-      }
+      verifiedData = await payos.webhooks.verify(webhookData);
     } catch (verifyErr) {
-      logger.payment('WARN', `Bỏ qua xác thực chữ ký (có thể là ping test): ${verifyErr.message}`);
-      verifiedData = webhookData.data || webhookData;
+      logger.payment('WARN', `Từ chối Webhook do chữ ký không hợp lệ (hoặc ping test): ${verifyErr.message}`);
+      return res.status(200).json({
+        success: false,
+        message: 'Chữ ký webhook không hợp lệ hoặc là ping test'
+      });
     }
 
-    const orderCode = verifiedData?.orderCode || webhookData?.data?.orderCode || webhookData?.orderCode;
-    const isSuccess = webhookData?.code === '00' || webhookData?.data?.code === '00' || verifiedData?.code === '00' || webhookData?.success === true;
+    const orderCode = verifiedData?.orderCode;
+    const isSuccess = webhookData?.code === '00' && verifiedData?.code === '00' && webhookData?.success !== false;
+    const amount = verifiedData?.amount;
 
     if (orderCode) {
-      await ticketService.handlePaymentWebhook(orderCode, isSuccess);
-      logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${isSuccess ? 'SUCCESS (SOLD)' : 'FAILED'}`);
+      const result = await ticketService.handlePaymentWebhook(orderCode, isSuccess, amount);
+      logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${result?.status || (isSuccess ? 'SUCCESS' : 'FAILED')}`);
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Đã nhận webhook thành công'
+      message: 'Đã nhận và xử lý webhook thành công'
     });
   } catch (err) {
     logger.error('PAYOS_WEBHOOK', err.message, err);
-    return res.status(200).json({ success: true, message: 'Đã nhận webhook (fallback)' });
-  }
-};
-
-exports.webhook = async (req, res) => {
-  try {
-    const result = await ticketService.handlePaymentWebhook(req.body.orderId || req.body.orderCode, Boolean(req.body.success));
-    res.json({ success: true, data: result });
-  } catch (err) {
-    const errorDto = new OrderErrorDTO(err.message);
-    res.status(400).json(errorDto.toJSON());
+    return res.status(200).json({ success: false, message: 'Đã nhận webhook (lỗi xử lý nội bộ)' });
   }
 };
 
@@ -266,9 +264,78 @@ const {
   ErrorResponseDTO: AdminErrorDTO
 } = require('../dto/admin.dto');
 
+exports.getAdminRefunds = async (req, res) => {
+  try {
+    const orders = await ticketService.getRefundOrdersForAdmin();
+    const responseDto = new OrderHistoryResponseDTO(orders);
+    return res.json(responseDto.toJSON());
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    return res.status(500).json(errorDto.toJSON());
+  }
+};
+
+exports.getAdminTickets = async (req, res) => {
+  try {
+    const orders = await ticketService.getAllAdminTickets();
+    const mapped = orders.map((o) => {
+      const items = Array.isArray(o.items) ? o.items : [];
+      const seatNums = items.map((i) => i.seat_number).filter(Boolean);
+      const isSeated = o.event_type === 'SEAT_BASED';
+      const ticketType = isSeated
+        ? `Ghế: ${seatNums.join(', ')}`
+        : items.map((i) => `${i.zone_name} (${i.seat_number})`).join(', ');
+      const statusMap = {
+        SUCCESS: 'paid',
+        CANCELLED: 'cancelled',
+        EXPIRED: 'cancelled',
+        FAILED: 'cancelled',
+        REFUND_PENDING: 'refund_pending',
+        REFUNDED: 'refunded',
+        PAYMENT_PROCESSING: 'processing',
+      };
+      return {
+        id: `tk_${o.order_code}`,
+        orderCode: Number(o.order_code),
+        ticketCode: `#${o.order_code}`,
+        eventId: o.event_id,
+        eventTitle: o.event_title,
+        customerName: o.customer_name || 'Khách hàng',
+        customerEmail: o.customer_email || '',
+        seatNumber: seatNums.join(', '),
+        ticketType,
+        purchaseDate: o.created_at ? new Date(o.created_at).toLocaleString('vi-VN') : '',
+        price: Number(o.total_amount) || 0,
+        status: statusMap[o.order_status] || 'paid',
+        orderStatus: o.order_status,
+      };
+    });
+    return res.json({ success: true, data: mapped });
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    return res.status(500).json(errorDto.toJSON());
+  }
+};
+
+exports.confirmRefundOrder = async (req, res) => {
+  try {
+    const updated = await ticketService.confirmOrderRefund(req.params.orderCode);
+    return res.json({
+      success: true,
+      message: `Đã xác nhận hoàn tiền cho đơn #${updated.order_code} thành công.`,
+      data: {
+        orderCode: Number(updated.order_code),
+        status: updated.status,
+      },
+    });
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    return res.status(400).json(errorDto.toJSON());
+  }
+};
+
 exports.createEvent = async (req, res) => {
   try {
-    // Request DTO: Validate input
     const requestDto = new CreateEventRequestDTO(req.body);
     const validation = requestDto.validate();
     
@@ -277,13 +344,26 @@ exports.createEvent = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    // Call service
     const eventData = requestDto.toServiceInput();
     const event = await ticketService.createEventWithConfig(eventData);
     
-    // Response DTO: Format output
     const responseDto = new CreateEventResponseDTO(event);
     res.json(responseDto.toJSON());
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
+  }
+};
+
+exports.updateEvent = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const event = await ticketService.updateEventWithConfig(eventId, req.body);
+    res.json({
+      success: true,
+      message: 'Cập nhật sự kiện thành công!',
+      data: event
+    });
   } catch (err) {
     const errorDto = new AdminErrorDTO(err.message);
     res.status(400).json(errorDto.toJSON());
