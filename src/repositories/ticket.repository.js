@@ -19,6 +19,66 @@ class TicketRepository {
     return result.rows[0];
   }
 
+  async updateEvent(eventId, eventData, dbClient = pool) {
+    const {
+      title,
+      description,
+      location,
+      start_time,
+      event_type,
+      category,
+      time,
+      min_price,
+      max_price,
+      image,
+      banner,
+      organizer,
+      highlights,
+      rules,
+      thumbnails,
+    } = eventData;
+
+    const result = await dbClient.query(
+      `UPDATE events
+       SET title = COALESCE($1, title),
+           description = COALESCE($2, description),
+           location = COALESCE($3, location),
+           start_time = COALESCE($4, start_time),
+           event_type = COALESCE($5, event_type),
+           category = COALESCE($6, category),
+           "time" = COALESCE($7, "time"),
+           min_price = COALESCE($8, min_price),
+           max_price = COALESCE($9, max_price),
+           image = COALESCE($10, image),
+           banner = COALESCE($11, banner),
+           organizer = COALESCE($12, organizer),
+           highlights = COALESCE($13, highlights),
+           rules = COALESCE($14, rules),
+           thumbnails = COALESCE($15, thumbnails)
+       WHERE id = $16
+       RETURNING *;`,
+      [
+        title !== undefined ? title : null,
+        description !== undefined ? description : null,
+        location !== undefined ? location : null,
+        start_time ? new Date(start_time) : null,
+        event_type !== undefined ? event_type : null,
+        category !== undefined ? category : null,
+        time !== undefined ? time : null,
+        min_price !== undefined && min_price !== '' ? Number(min_price) : null,
+        max_price !== undefined && max_price !== '' ? Number(max_price) : null,
+        image !== undefined ? image : null,
+        banner !== undefined ? banner : null,
+        organizer !== undefined ? organizer : null,
+        highlights !== undefined ? JSON.stringify(highlights) : null,
+        rules !== undefined ? JSON.stringify(rules) : null,
+        Array.isArray(thumbnails) ? thumbnails : null,
+        eventId,
+      ]
+    );
+    return result.rows[0];
+  }
+
   async deleteEvent(eventId) {
     await pool.query('DELETE FROM events WHERE id = $1;', [eventId]);
     return true;

@@ -9,6 +9,16 @@ class CreateEventRequestDTO {
     this.event_type = body.event_type;
     this.seatConfig = body.seatConfig;
     this.zoneConfigs = body.zoneConfigs;
+    this.category = body.category;
+    this.time = body.time;
+    this.min_price = body.min_price;
+    this.max_price = body.max_price;
+    this.image = body.image;
+    this.banner = body.banner;
+    this.organizer = body.organizer;
+    this.highlights = body.highlights;
+    this.rules = body.rules;
+    this.thumbnails = body.thumbnails;
   }
 
   validate() {
@@ -74,7 +84,17 @@ class CreateEventRequestDTO {
       start_time: this.start_time,
       event_type: this.event_type,
       seatConfig: this.seatConfig,
-      zoneConfigs: this.zoneConfigs
+      zoneConfigs: this.zoneConfigs,
+      category: this.category,
+      time: this.time,
+      min_price: this.min_price,
+      max_price: this.max_price,
+      image: this.image,
+      banner: this.banner,
+      organizer: this.organizer,
+      highlights: this.highlights,
+      rules: this.rules,
+      thumbnails: this.thumbnails
     };
   }
 }

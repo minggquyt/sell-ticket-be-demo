@@ -7,6 +7,7 @@ router.get('/tickets', verifyToken, requireAdmin, ticketController.getAdminTicke
 router.get('/refunds', verifyToken, requireAdmin, ticketController.getAdminRefunds);
 router.post('/orders/:orderCode/confirm-refund', verifyToken, requireAdmin, ticketController.confirmRefundOrder);
 router.post('/events', verifyToken, requireAdmin, ticketController.createEvent);
+router.put('/events/:eventId', verifyToken, requireAdmin, ticketController.updateEvent);
 router.delete('/events/:eventId', verifyToken, requireAdmin, ticketController.deleteEvent);
 
 module.exports = router;

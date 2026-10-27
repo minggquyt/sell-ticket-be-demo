@@ -798,7 +798,25 @@ class TicketService {
     return updated;
   }
   async createEventWithConfig(eventData) {
-    const { title, description, location, start_time, event_type, seatConfig, zoneConfigs } = eventData;
+    const {
+      title,
+      description,
+      location,
+      start_time,
+      event_type,
+      seatConfig,
+      zoneConfigs,
+      category,
+      time,
+      min_price,
+      max_price,
+      image,
+      banner,
+      organizer,
+      highlights,
+      rules,
+      thumbnails,
+    } = eventData;
     const client = await pool.connect();
 
     try {
@@ -813,34 +831,194 @@ class TicketService {
         client
       );
 
-      if (event_type === 'SEAT_BASED') {
-        const total = Number(seatConfig.totalSeats) || 12;
-        const price = Number(seatConfig.price) || 200000;
-        const prefix = seatConfig.prefix || 'S';
+      // Cập nhật bổ sung các trường chi tiết nếu có
+      await client.query(
+        `UPDATE events
+         SET category = COALESCE($1, category),
+             "time" = COALESCE($2, "time"),
+             min_price = COALESCE($3, min_price),
+             max_price = COALESCE($4, max_price),
+             image = COALESCE($5, image),
+             banner = COALESCE($6, banner),
+             organizer = COALESCE($7, organizer),
+             highlights = COALESCE($8, highlights),
+             rules = COALESCE($9, rules),
+             thumbnails = COALESCE($10, thumbnails)
+         WHERE id = $11;`,
+        [
+          category || null,
+          time || null,
+          min_price !== undefined && min_price !== '' ? Number(min_price) : 0,
+          max_price !== undefined && max_price !== '' ? Number(max_price) : 0,
+          image || null,
+          banner || null,
+          organizer || null,
+          highlights ? JSON.stringify(highlights) : null,
+          rules ? JSON.stringify(rules) : null,
+          Array.isArray(thumbnails) ? thumbnails : null,
+          event.id,
+        ]
+      );
 
-        for (let i = 1; i <= total; i++) {
-          await client.query(`
-            INSERT INTO seats (event_id, seat_number, zone_name, price, status)
-            VALUES ($1, $2, 'STANDARD', $3, 'AVAILABLE');
-          `, [event.id, `${prefix}${i}`, price]);
+      if (event_type === 'SEAT_BASED') {
+        const rowsCount = Number(seatConfig?.rowsCount) || 1;
+        const seatsPerRow =
+          Number(seatConfig?.seatsPerRow) ||
+          Math.ceil((Number(seatConfig?.totalSeats) || 12) / rowsCount);
+        const price = Number(seatConfig?.price) || 200000;
+
+        for (let r = 0; r < rowsCount; r++) {
+          const rowLetter = String.fromCharCode(65 + r);
+          for (let s = 1; s <= seatsPerRow; s++) {
+            await client.query(
+              `INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+               VALUES ($1, $2, 'STANDARD', $3, 'AVAILABLE');`,
+              [event.id, `${rowLetter}${s}`, price]
+            );
+          }
         }
       } else {
         for (const z of (zoneConfigs || [])) {
           const count = Number(z.count) || 10;
           const price = Number(z.price) || 200000;
-          const zoneName = z.zoneName.toUpperCase();
+          const zoneName = (z.zoneName || 'STANDARD').toUpperCase();
 
           for (let i = 1; i <= count; i++) {
-            await client.query(`
-              INSERT INTO seats (event_id, seat_number, zone_name, price, status)
-              VALUES ($1, $2, $3, $4, 'AVAILABLE');
-            `, [event.id, `${zoneName}-${String(i).padStart(2, '0')}`, zoneName, price]);
+            await client.query(
+              `INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+               VALUES ($1, $2, $3, $4, 'AVAILABLE');`,
+              [event.id, `${zoneName}-${String(i).padStart(2, '0')}`, zoneName, price]
+            );
           }
         }
       }
 
       await client.query('COMMIT');
       return event;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateEventWithConfig(eventId, eventData) {
+    const {
+      title,
+      description,
+      location,
+      start_time,
+      event_type,
+      seatConfig,
+      zoneConfigs,
+      category,
+      time,
+      min_price,
+      max_price,
+      image,
+      banner,
+      organizer,
+      highlights,
+      rules,
+      thumbnails,
+    } = eventData;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const updatedEvent = await ticketRepository.updateEvent(
+        eventId,
+        {
+          title,
+          description,
+          location,
+          start_time,
+          event_type,
+          category,
+          time,
+          min_price,
+          max_price,
+          image,
+          banner,
+          organizer,
+          highlights,
+          rules,
+          thumbnails,
+        },
+        client
+      );
+
+      if (!updatedEvent) {
+        throw new Error(`Sự kiện với ID ${eventId} không tồn tại.`);
+      }
+
+      // Kiểm tra xem sự kiện đã có ghế nào được bán / đang giữ không
+      const soldSeatsRes = await client.query(
+        `SELECT COUNT(*) FROM seats WHERE event_id = $1 AND status != 'AVAILABLE';`,
+        [eventId]
+      );
+      const hasSoldOrHeld = parseInt(soldSeatsRes.rows[0].count, 10) > 0;
+
+      if (!hasSoldOrHeld) {
+        // Chưa có vé nào bán: Xóa các ghế cũ và sinh lại layout mới theo yêu cầu
+        await client.query('DELETE FROM seats WHERE event_id = $1;', [eventId]);
+
+        if (event_type === 'SEAT_BASED' && seatConfig) {
+          const rowsCount = Number(seatConfig.rowsCount) || 1;
+          const seatsPerRow =
+            Number(seatConfig.seatsPerRow) ||
+            Math.ceil((Number(seatConfig.totalSeats) || 12) / rowsCount);
+          const price = Number(seatConfig.price) || 200000;
+
+          for (let r = 0; r < rowsCount; r++) {
+            const rowLetter = String.fromCharCode(65 + r);
+            for (let s = 1; s <= seatsPerRow; s++) {
+              await client.query(
+                `INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+                 VALUES ($1, $2, 'STANDARD', $3, 'AVAILABLE');`,
+                [eventId, `${rowLetter}${s}`, price]
+              );
+            }
+          }
+        } else if (event_type === 'ZONE_BASED' && Array.isArray(zoneConfigs)) {
+          for (const z of zoneConfigs) {
+            const count = Number(z.count) || 10;
+            const price = Number(z.price) || 200000;
+            const zoneName = (z.zoneName || 'STANDARD').toUpperCase();
+
+            for (let i = 1; i <= count; i++) {
+              await client.query(
+                `INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+                 VALUES ($1, $2, $3, $4, 'AVAILABLE');`,
+                [eventId, `${zoneName}-${String(i).padStart(2, '0')}`, zoneName, price]
+              );
+            }
+          }
+        }
+      } else {
+        // Đã có vé bán: Không thể thay đổi số lượng/cấu trúc ghế để tránh mất dữ liệu vé đã mua
+        // Cập nhật giá cho các ghế AVAILABLE còn lại
+        if (event_type === 'SEAT_BASED' && seatConfig?.price) {
+          await client.query(
+            `UPDATE seats SET price = $1 WHERE event_id = $2 AND status = 'AVAILABLE';`,
+            [Number(seatConfig.price), eventId]
+          );
+        } else if (event_type === 'ZONE_BASED' && Array.isArray(zoneConfigs)) {
+          for (const z of zoneConfigs) {
+            if (z.zoneName && z.price !== undefined) {
+              await client.query(
+                `UPDATE seats SET price = $1 WHERE event_id = $2 AND UPPER(zone_name) = $3 AND status = 'AVAILABLE';`,
+                [Number(z.price), eventId, (z.zoneName || '').toUpperCase()]
+              );
+            }
+          }
+        }
+      }
+
+      await client.query('COMMIT');
+      return updatedEvent;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

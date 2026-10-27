@@ -354,6 +354,21 @@ exports.createEvent = async (req, res) => {
   }
 };
 
+exports.updateEvent = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const event = await ticketService.updateEventWithConfig(eventId, req.body);
+    res.json({
+      success: true,
+      message: 'Cập nhật sự kiện thành công!',
+      data: event
+    });
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    res.status(400).json(errorDto.toJSON());
+  }
+};
+
 exports.deleteEvent = async (req, res) => {
   try {
     await ticketService.deleteEvent(req.params.eventId);
