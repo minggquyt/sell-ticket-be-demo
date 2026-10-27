@@ -106,7 +106,9 @@ class TicketRepository {
         o.order_code,
         o.total_amount,
         o.status AS order_status,
+        o.status,
         o.created_at,
+        e.id AS event_id,
         e.title AS event_title,
         e.event_type,
         e.location,
@@ -116,19 +118,99 @@ class TicketRepository {
               'seat_number', s.seat_number,
               'zone_name', s.zone_name,
               'price', oi.price
-            )
+            ) ORDER BY s.seat_number ASC
           ) FILTER (WHERE s.id IS NOT NULL), '[]'
         ) AS items
       FROM orders o
-      JOIN order_items oi ON o.order_code = oi.order_code
-      JOIN seats s ON oi.seat_id = s.id
-      JOIN events e ON s.event_id = e.id
+      LEFT JOIN order_items oi ON o.order_code = oi.order_code
+      LEFT JOIN seats s ON oi.seat_id = s.id
+      LEFT JOIN events e ON s.event_id = e.id
       WHERE o.user_id = $1
       GROUP BY o.order_code, e.id
       ORDER BY o.created_at DESC;`,
       [userId]
     );
     return result.rows;
+  }
+
+  async getRefundOrdersForAdmin() {
+    const result = await pool.query(
+      `SELECT 
+        o.order_code,
+        o.user_id,
+        u.full_name AS customer_name,
+        u.email AS customer_email,
+        o.total_amount,
+        o.status AS order_status,
+        o.created_at,
+        e.id AS event_id,
+        e.title AS event_title,
+        e.event_type,
+        e.location,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'seat_number', s.seat_number,
+              'zone_name', s.zone_name,
+              'price', oi.price
+            ) ORDER BY s.seat_number ASC
+          ) FILTER (WHERE s.id IS NOT NULL), '[]'
+        ) AS items
+      FROM orders o
+      JOIN users u ON o.user_id = u.id
+      LEFT JOIN order_items oi ON o.order_code = oi.order_code
+      LEFT JOIN seats s ON oi.seat_id = s.id
+      LEFT JOIN events e ON s.event_id = e.id
+      WHERE o.status IN ('REFUND_PENDING', 'REFUNDED')
+      GROUP BY o.order_code, u.id, e.id
+      ORDER BY CASE WHEN o.status = 'REFUND_PENDING' THEN 0 ELSE 1 END, o.created_at DESC;`
+    );
+    return result.rows;
+  }
+
+  async getAllAdminTickets() {
+    const result = await pool.query(
+      `SELECT 
+        o.order_code,
+        o.user_id,
+        u.full_name AS customer_name,
+        u.email AS customer_email,
+        o.total_amount,
+        o.status AS order_status,
+        o.created_at,
+        e.id AS event_id,
+        e.title AS event_title,
+        e.event_type,
+        e.location,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'seat_number', s.seat_number,
+              'zone_name', s.zone_name,
+              'price', oi.price
+            ) ORDER BY s.seat_number ASC
+          ) FILTER (WHERE s.id IS NOT NULL), '[]'
+        ) AS items
+      FROM orders o
+      JOIN users u ON o.user_id = u.id
+      JOIN order_items oi ON o.order_code = oi.order_code
+      JOIN seats s ON oi.seat_id = s.id
+      JOIN events e ON s.event_id = e.id
+      GROUP BY o.order_code, u.id, e.id
+      ORDER BY o.created_at DESC;`
+    );
+    return result.rows;
+  }
+
+  async confirmOrderRefund(orderCode) {
+    const result = await pool.query(
+      `UPDATE orders
+       SET status = 'REFUNDED'
+       WHERE order_code = $1 AND status = 'REFUND_PENDING'
+       RETURNING *;`,
+      [orderCode]
+    );
+    return result.rows[0] || null;
   }
 
   async getOrderWithItemsByCode(orderCode, dbClient = pool) {

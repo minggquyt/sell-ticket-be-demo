@@ -5,5 +5,6 @@ const { verifyToken } = require('../middlewares/auth.middleware');
 
 router.get('/my-history', verifyToken, ticketController.getMyOrders);
 router.get('/:orderCode/status', verifyToken, ticketController.getOrderStatus);
+router.post('/:orderCode/cancel', verifyToken, ticketController.cancelOrder);
 
 module.exports = router;

@@ -153,14 +153,24 @@ exports.releaseSeats = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    const { seatIds } = requestDto.toServiceInput();
-    const released = await ticketService.releaseReservedSeats(req.user.id, seatIds);
+    const { seatIds, orderCode } = requestDto.toServiceInput();
+    const released = await ticketService.releaseReservedSeats(req.user.id, seatIds, orderCode);
     
     const responseDto = new ReleaseSeatsResponseDTO(released);
     res.json(responseDto.toJSON());
   } catch (err) {
     const errorDto = new SeatErrorDTO(err.message);
     res.status(400).json(errorDto.toJSON());
+  }
+};
+
+exports.cancelOrder = async (req, res) => {
+  try {
+    const result = await ticketService.cancelOrder(req.user.id, req.params.orderCode);
+    return res.json({ success: true, message: 'Đã hủy đơn hàng thành công.', data: result });
+  } catch (err) {
+    const errorDto = new OrderErrorDTO(err.message);
+    return res.status(400).json(errorDto.toJSON());
   }
 };
 
@@ -230,8 +240,8 @@ exports.payosWebhook = async (req, res) => {
     const amount = verifiedData?.amount;
 
     if (orderCode) {
-      await ticketService.handlePaymentWebhook(orderCode, isSuccess, amount);
-      logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${isSuccess ? 'SUCCESS (SOLD)' : 'FAILED'}`);
+      const result = await ticketService.handlePaymentWebhook(orderCode, isSuccess, amount);
+      logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${result?.status || (isSuccess ? 'SUCCESS' : 'FAILED')}`);
     }
 
     return res.status(200).json({
@@ -252,6 +262,76 @@ const {
   DeleteEventResponseDTO,
   ErrorResponseDTO: AdminErrorDTO
 } = require('../dto/admin.dto');
+
+exports.getAdminRefunds = async (req, res) => {
+  try {
+    const orders = await ticketService.getRefundOrdersForAdmin();
+    const responseDto = new OrderHistoryResponseDTO(orders);
+    return res.json(responseDto.toJSON());
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    return res.status(500).json(errorDto.toJSON());
+  }
+};
+
+exports.getAdminTickets = async (req, res) => {
+  try {
+    const orders = await ticketService.getAllAdminTickets();
+    const mapped = orders.map((o) => {
+      const items = Array.isArray(o.items) ? o.items : [];
+      const seatNums = items.map((i) => i.seat_number).filter(Boolean);
+      const isSeated = o.event_type === 'SEAT_BASED';
+      const ticketType = isSeated
+        ? `Ghế: ${seatNums.join(', ')}`
+        : items.map((i) => `${i.zone_name} (${i.seat_number})`).join(', ');
+      const statusMap = {
+        SUCCESS: 'paid',
+        CANCELLED: 'cancelled',
+        EXPIRED: 'cancelled',
+        FAILED: 'cancelled',
+        REFUND_PENDING: 'refund_pending',
+        REFUNDED: 'refunded',
+        PAYMENT_PROCESSING: 'processing',
+      };
+      return {
+        id: `tk_${o.order_code}`,
+        orderCode: Number(o.order_code),
+        ticketCode: `#${o.order_code}`,
+        eventId: o.event_id,
+        eventTitle: o.event_title,
+        customerName: o.customer_name || 'Khách hàng',
+        customerEmail: o.customer_email || '',
+        seatNumber: seatNums.join(', '),
+        ticketType,
+        purchaseDate: o.created_at ? new Date(o.created_at).toLocaleString('vi-VN') : '',
+        price: Number(o.total_amount) || 0,
+        status: statusMap[o.order_status] || 'paid',
+        orderStatus: o.order_status,
+      };
+    });
+    return res.json({ success: true, data: mapped });
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    return res.status(500).json(errorDto.toJSON());
+  }
+};
+
+exports.confirmRefundOrder = async (req, res) => {
+  try {
+    const updated = await ticketService.confirmOrderRefund(req.params.orderCode);
+    return res.json({
+      success: true,
+      message: `Đã xác nhận hoàn tiền cho đơn #${updated.order_code} thành công.`,
+      data: {
+        orderCode: Number(updated.order_code),
+        status: updated.status,
+      },
+    });
+  } catch (err) {
+    const errorDto = new AdminErrorDTO(err.message);
+    return res.status(400).json(errorDto.toJSON());
+  }
+};
 
 exports.createEvent = async (req, res) => {
   try {

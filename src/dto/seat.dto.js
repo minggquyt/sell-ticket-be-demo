@@ -119,17 +119,16 @@ class ReserveZoneDTO {
 class ReleaseSeatDTO {
   constructor(body) {
     this.seatIds = body.seatIds;
+    this.orderCode = body.orderCode;
   }
 
   validate() {
     const errors = [];
 
-    if (!this.seatIds) {
-      errors.push('seatIds là bắt buộc.');
-    } else if (!Array.isArray(this.seatIds)) {
+    if (!this.seatIds && !this.orderCode) {
+      errors.push('Cần cung cấp seatIds hoặc orderCode để hủy giữ chỗ.');
+    } else if (this.seatIds && !Array.isArray(this.seatIds)) {
       errors.push('seatIds phải là mảng.');
-    } else if (this.seatIds.length === 0) {
-      errors.push('seatIds không được rỗng.');
     }
 
     return {
@@ -140,7 +139,8 @@ class ReleaseSeatDTO {
 
   toServiceInput() {
     return {
-      seatIds: this.seatIds
+      seatIds: Array.isArray(this.seatIds) ? this.seatIds : [],
+      orderCode: this.orderCode || null
     };
   }
 }

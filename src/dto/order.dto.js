@@ -79,23 +79,29 @@ class OrderHistoryItemDTO {
   constructor(order) {
     this.orderCode = Number(order.order_code);
     this.totalAmount = order.total_amount;
-    this.orderStatus = order.order_status;
+    this.status = order.order_status || order.status;
     this.createdAt = order.created_at;
+    this.eventId = order.event_id || null;
     this.eventTitle = order.event_title;
     this.eventType = order.event_type;
     this.location = order.location;
-    this.items = order.items.map(item => new OrderItemDTO(item).toJSON());
+    this.customerName = order.customer_name || null;
+    this.customerEmail = order.customer_email || null;
+    this.items = (order.items || []).map(item => new OrderItemDTO(item).toJSON());
   }
 
   toJSON() {
     return {
       orderCode: this.orderCode,
       totalAmount: this.totalAmount,
-      orderStatus: this.orderStatus,
+      status: this.status,
       createdAt: this.createdAt,
+      eventId: this.eventId,
       eventTitle: this.eventTitle,
       eventType: this.eventType,
       location: this.location,
+      ...(this.customerName ? { customerName: this.customerName } : {}),
+      ...(this.customerEmail ? { customerEmail: this.customerEmail } : {}),
       items: this.items
     };
   }
