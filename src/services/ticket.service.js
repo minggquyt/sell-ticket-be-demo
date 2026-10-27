@@ -357,6 +357,7 @@ class TicketService {
         SET status = 'PAYMENT_PROCESSING', reserved_until = $1, current_order_id = $2 
         WHERE id = ANY($3::uuid[]);
       `, [paymentTimeout, order.id, seatIds]);
+      
 
       let checkoutUrl = null;
       try {

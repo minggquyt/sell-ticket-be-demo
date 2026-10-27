@@ -55,6 +55,7 @@ exports.getEventDetails = async (req, res) => {
     }
   } catch (err) {
     const errorDto = new EventErrorDTO(err.message);
+    // BỔ SUNG FIELD GIỚI HẠN SỐ GHẾ.
     res.status(500).json(errorDto.toJSON());
   }
 };
