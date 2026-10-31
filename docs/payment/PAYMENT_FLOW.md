@@ -10,13 +10,17 @@ Tài liệu tóm tắt kiến trúc và luồng thanh toán tích hợp cổng *
 stateDiagram-v2
     [*] --> PAYMENT_PROCESSING: Khách bấm "Thanh toán ngay" (tạo link PayOS)
     
-    PAYMENT_PROCESSING --> SUCCESS: Thanh toán đúng hạn thành công
+    PAYMENT_PROCESSING --> SUCCESS: Thanh toán đúng hạn thành công (ghế thành SOLD)
     PAYMENT_PROCESSING --> CANCELLED: Khách bấm "Hủy" trên PayOS / bấm Back
     PAYMENT_PROCESSING --> EXPIRED: Hết hạn thanh toán (PayOS timeout)
     
-    CANCELLED --> SUCCESS: Khách chuyển tiền muộn (ghế/zone vẫn còn trống)
-    CANCELLED --> REFUND_PENDING: Khách chuyển tiền muộn (ghế cũ đã bị người khác mua)
-    EXPIRED --> REFUND_PENDING: Khách chuyển tiền muộn khi ghế đã có người mua
+    state "Kiểm tra ghế/khu vực khi tiền về trễ" as CheckLatePayment <<choice>>
+    
+    CANCELLED --> CheckLatePayment: Khách chuyển tiền muộn sau khi HỦY
+    EXPIRED --> CheckLatePayment: Khách chuyển tiền muộn sau khi HẾT HẠN
+    
+    CheckLatePayment --> SUCCESS: Ghế cũ còn trống HOẶC khu vực (Zone) còn đủ vé trống thay thế
+    CheckLatePayment --> REFUND_PENDING: Ghế cố định đã bị người khác mua HOẶC khu vực (Zone) đã hết sạch vé
     
     REFUND_PENDING --> REFUNDED: Admin xác nhận đã chuyển khoản trả tiền cho khách
 ```
