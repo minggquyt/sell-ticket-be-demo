@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const logger = require('../utils/logger');
 
 class TicketRepository {
   // Events
@@ -316,12 +317,30 @@ class TicketRepository {
   }
 
   async createOrder(userId, totalAmount, expiresAt, phone = null, citizenId = null, dbClient = pool) {
+    const logPayload = {
+      userId,
+      totalAmount,
+      expiresAt,
+      phone,
+      citizenId
+    };
+
+    
+    logger.payment('CREATE_ORDER_BEFORE_INSERT', `Payload: ${JSON.stringify(logPayload)}`);
+
     const result = await dbClient.query(
       `INSERT INTO orders (user_id, total_amount, status, expires_at, phone, citizen_id) 
        VALUES ($1, $2, 'PAYMENT_PROCESSING', $3, $4, $5) 
        RETURNING *;`,
       [userId, totalAmount, expiresAt, phone ?? null, citizenId ?? null]
     );
+
+    logger.payment('CREATE_ORDER_AFTER_INSERT', `Inserted order: ${JSON.stringify({
+      orderCode: result.rows[0]?.order_code,
+      phone: result.rows[0]?.phone,
+      citizenId: result.rows[0]?.citizen_id
+    })}`);
+
     return result.rows[0];
   }
 

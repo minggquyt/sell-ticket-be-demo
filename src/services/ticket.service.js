@@ -368,6 +368,15 @@ class TicketService {
   async startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl, phone, citizenId) {
     const client = await pool.connect();
     try {
+      logger.payment('START_CHECKOUT_SERVICE', `Inputs: ${JSON.stringify({
+        userId,
+        seatCount: Array.isArray(seatIds) ? seatIds.length : 0,
+        phone,
+        citizenId,
+        returnUrl,
+        cancelUrl
+      })}`);
+
       await client.query('BEGIN');
 
       const uniqueSeatIds = [...new Set(seatIds)];

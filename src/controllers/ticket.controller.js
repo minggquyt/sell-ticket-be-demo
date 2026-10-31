@@ -201,21 +201,36 @@ exports.getOrderStatus = async (req, res) => {
 
 exports.startCheckout = async (req, res) => {
   try {
-    console.log(req.body);
+    logger.payment('START_CHECKOUT_REQUEST', `Raw body: ${JSON.stringify({
+      userId: req.user?.id,
+      body: req.body
+    })}`);
+
     const requestDto = new CheckoutRequestDTO(req.body);
     const validation = requestDto.validate();
     
     if (!validation.isValid) {
+      logger.payment('START_CHECKOUT_INVALID', `Validation failed: ${validation.errors.join(' | ')}`);
       const errorDto = new OrderErrorDTO(validation.errors.join(' '));
       return res.status(400).json(errorDto.toJSON());
     }
 
-    const { seatIds, returnUrl, cancelUrl, phone, citizenId } = requestDto.toServiceInput();
+    const serviceInput = requestDto.toServiceInput();
+    logger.payment('START_CHECKOUT_SERVICE_INPUT', `Parsed values: ${JSON.stringify({
+      seatIds: serviceInput.seatIds,
+      phone: serviceInput.phone,
+      citizenId: serviceInput.citizenId,
+      returnUrl: serviceInput.returnUrl,
+      cancelUrl: serviceInput.cancelUrl
+    })}`);
+
+    const { seatIds, returnUrl, cancelUrl, phone, citizenId } = serviceInput;
     const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl, phone, citizenId);
     
     const responseDto = new CheckoutResponseDTO(result);
     res.json(responseDto.toJSON());
   } catch (err) {
+    logger.error('START_CHECKOUT_CONTROLLER', err.message, err);
     const errorDto = new OrderErrorDTO(err.message);
     res.status(400).json(errorDto.toJSON());
   }
