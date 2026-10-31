@@ -201,6 +201,7 @@ exports.getOrderStatus = async (req, res) => {
 
 exports.startCheckout = async (req, res) => {
   try {
+    console.log(req.body);
     const requestDto = new CheckoutRequestDTO(req.body);
     const validation = requestDto.validate();
     
@@ -209,8 +210,8 @@ exports.startCheckout = async (req, res) => {
       return res.status(400).json(errorDto.toJSON());
     }
 
-    const { seatIds, returnUrl, cancelUrl } = requestDto.toServiceInput();
-    const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl);
+    const { seatIds, returnUrl, cancelUrl, phone, citizenId } = requestDto.toServiceInput();
+    const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl, phone, citizenId);
     
     const responseDto = new CheckoutResponseDTO(result);
     res.json(responseDto.toJSON());

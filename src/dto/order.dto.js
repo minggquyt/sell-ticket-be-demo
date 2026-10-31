@@ -1,10 +1,12 @@
 // ============ REQUEST DTOs ============
 
 class CheckoutRequestDTO {
-  constructor(body) {
+  constructor(body = {}) {
     this.seatIds = body.seatIds;
     this.returnUrl = body.returnUrl;
     this.cancelUrl = body.cancelUrl;
+    this.phone = body.phone;
+    this.citizenId = body.citizenId;
   }
 
   validate() {
@@ -18,6 +20,21 @@ class CheckoutRequestDTO {
       errors.push('seatIds không được rỗng.');
     }
 
+    const normalizedPhone = this.phone !== undefined && this.phone !== null ? String(this.phone).trim() : '';
+    const normalizedCitizenId = this.citizenId !== undefined && this.citizenId !== null ? String(this.citizenId).trim() : '';
+
+    if (!normalizedPhone) {
+      errors.push('phone là bắt buộc.');
+    } else if (!/^(0|\+84)\d{9,10}$/.test(normalizedPhone.replace(/\s+/g, ''))) {
+      errors.push('phone không hợp lệ. Ví dụ: 0901234567 hoặc +84901234567.');
+    }
+
+    if (!normalizedCitizenId) {
+      errors.push('citizenId là bắt buộc.');
+    } else if (!/^\d{12}$/.test(normalizedCitizenId)) {
+      errors.push('citizenId phải là 12 chữ số CCCD hợp lệ.');
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -28,7 +45,9 @@ class CheckoutRequestDTO {
     return {
       seatIds: this.seatIds,
       returnUrl: this.returnUrl,
-      cancelUrl: this.cancelUrl
+      cancelUrl: this.cancelUrl,
+      phone: this.phone !== undefined && this.phone !== null ? String(this.phone).trim() : '',
+      citizenId: this.citizenId !== undefined && this.citizenId !== null ? String(this.citizenId).trim() : ''
     };
   }
 }
@@ -87,6 +106,8 @@ class OrderHistoryItemDTO {
     this.location = order.location;
     this.customerName = order.customer_name || null;
     this.customerEmail = order.customer_email || null;
+    this.customerPhone = order.phone || order.customer_phone || null;
+    this.customerCitizenId = order.citizen_id || order.citizenId || null;
     this.items = (order.items || []).map(item => new OrderItemDTO(item).toJSON());
   }
 
@@ -102,6 +123,8 @@ class OrderHistoryItemDTO {
       location: this.location,
       ...(this.customerName ? { customerName: this.customerName } : {}),
       ...(this.customerEmail ? { customerEmail: this.customerEmail } : {}),
+      ...(this.customerPhone ? { customerPhone: this.customerPhone, phone: this.customerPhone } : {}),
+      ...(this.customerCitizenId ? { customerCitizenId: this.customerCitizenId, citizenId: this.customerCitizenId } : {}),
       items: this.items
     };
   }
@@ -134,6 +157,8 @@ class OrderStatusResponseDTO {
       eventTitle: order.event_title,
       eventType: order.event_type,
       location: order.location,
+      ...(order.phone || order.customer_phone ? { customerPhone: order.phone || order.customer_phone, phone: order.phone || order.customer_phone } : {}),
+      ...(order.citizen_id || order.citizenId ? { customerCitizenId: order.citizen_id || order.citizenId, citizenId: order.citizen_id || order.citizenId } : {}),
       items: (order.items || []).map(item => new OrderItemDTO(item).toJSON())
     };
   }

@@ -70,6 +70,8 @@ class TicketService {
       }
 
       // TRƯỜNG HỢP B: Đủ 100% số ghế yêu cầu -> UPDATE & COMMIT NGAY
+      
+      // THÊM CHỨC NĂNG TẠO HÓA ĐƠN KÈM THEO SDT VÀ CCCD 
       if (availableSeats.length === requestedSeatIds.length) {
         const reservedUntil = new Date(Date.now() + SEAT_HOLD_DURATION_SECONDS * 1000);
 
@@ -363,7 +365,7 @@ class TicketService {
     return await this.releaseReservedSeats(userId, [], numericCode);
   }
 
-  async startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
+  async startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl, phone, citizenId) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -392,7 +394,7 @@ class TicketService {
       const paymentTimeout = new Date(expiredAt * 1000);
       const seatReservedUntil = new Date((expiredAt + PAYMENT_GRACE_SECONDS) * 1000);
 
-      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, client);
+      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, phone, citizenId, client);
       const orderCode = Number(order.order_code);
 
       for (const s of seatRes.rows) {

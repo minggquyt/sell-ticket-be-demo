@@ -168,6 +168,8 @@ class TicketRepository {
         o.status AS order_status,
         o.status,
         o.created_at,
+        o.phone,
+        o.citizen_id,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
@@ -200,6 +202,8 @@ class TicketRepository {
         o.user_id,
         u.full_name AS customer_name,
         u.email AS customer_email,
+        o.phone,
+        o.citizen_id,
         o.total_amount,
         o.status AS order_status,
         o.created_at,
@@ -235,6 +239,8 @@ class TicketRepository {
         o.user_id,
         u.full_name AS customer_name,
         u.email AS customer_email,
+        o.phone,
+        o.citizen_id,
         o.total_amount,
         o.status AS order_status,
         o.created_at,
@@ -282,6 +288,8 @@ class TicketRepository {
         o.status AS order_status,
         o.expires_at,
         o.created_at,
+        o.phone,
+        o.citizen_id,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
@@ -307,12 +315,12 @@ class TicketRepository {
     return result.rows[0] || null;
   }
 
-  async createOrder(userId, totalAmount, expiresAt, dbClient = pool) {
+  async createOrder(userId, totalAmount, expiresAt, phone = null, citizenId = null, dbClient = pool) {
     const result = await dbClient.query(
-      `INSERT INTO orders (user_id, total_amount, status, expires_at) 
-       VALUES ($1, $2, 'PAYMENT_PROCESSING', $3) 
+      `INSERT INTO orders (user_id, total_amount, status, expires_at, phone, citizen_id) 
+       VALUES ($1, $2, 'PAYMENT_PROCESSING', $3, $4, $5) 
        RETURNING *;`,
-      [userId, totalAmount, expiresAt]
+      [userId, totalAmount, expiresAt, phone ?? null, citizenId ?? null]
     );
     return result.rows[0];
   }
