@@ -4,6 +4,7 @@ const cors = require("cors");
 const indexRoutes = require("./src/routes/index.route");
 const logger = require("./src/utils/logger");
 const { startSeatReleaseJob } = require("./src/jobs/seat-release.job");
+const { SSE_HEARTBEAT_INTERVAL_MS } = require("./src/config/constants");
 
 const app = express();
 app.use(cors());
@@ -57,10 +58,11 @@ app.get("/api/logs/stream", (req, res) => {
   // Thêm client vào danh sách lắng nghe
   logger.addSSEClient(res);
 
-  // Heartbeat ping mỗi 15s để giữ kết nối không bị timeout bởi proxy / Cloudflare
+  // Heartbeat ping để giữ kết nối không bị timeout bởi proxy / Cloudflare
+  // FIX #9: Dùng constant thay vì magic number
   const keepAlive = setInterval(() => {
     res.write(": heartbeat\n\n");
-  }, 15000);
+  }, SSE_HEARTBEAT_INTERVAL_MS);
 
   req.on("close", () => {
     clearInterval(keepAlive);

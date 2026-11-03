@@ -259,6 +259,16 @@ class TicketService {
       })}`);
 
       const uniqueSeatIds = [...new Set(seatIds)];
+      
+      // FIX #5: Kiểm tra tổng số vé SUCCESS của user trong database
+      const successfulTicketsCount = await ticketRepository.countSuccessfulTicketsByUser(userId, client);
+      const requestedCount = uniqueSeatIds.length;
+      
+      if (successfulTicketsCount + requestedCount > MAX_TICKETS_PER_USER) {
+        throw new Error(`Bạn đã mua ${successfulTicketsCount} vé. Chỉ được mua tối đa ${MAX_TICKETS_PER_USER} vé (còn lại ${MAX_TICKETS_PER_USER - successfulTicketsCount} vé).`);
+      }
+      
+      // FIX #1: Race condition - Lock ghế và verify ownership trong cùng transaction
       const seatRows = await ticketRepository.getSeatsByIdsForUpdate(uniqueSeatIds, client);
 
       if (seatRows.length !== uniqueSeatIds.length) {
@@ -267,10 +277,24 @@ class TicketService {
 
       const now = new Date();
       let total = 0;
+      
+      // FIX #1: Kiểm tra chặt chẽ ownership và status
       for (const seat of seatRows) {
-        if (seat.status !== 'RESERVED' || seat.reserved_by !== userId || new Date(seat.reserved_until) <= now) {
-          throw new Error(`Ghế ${seat.seat_number} không hợp lệ hoặc đã hết hạn giữ chỗ.`);
+        // Kiểm tra ghế phải đang được user này giữ
+        if (seat.reserved_by !== userId) {
+          throw new Error(`Ghế ${seat.seat_number} không thuộc quyền sở hữu của bạn.`);
         }
+        
+        // Kiểm tra status phải là RESERVED (chưa checkout)
+        if (seat.status !== 'RESERVED') {
+          throw new Error(`Ghế ${seat.seat_number} đã được thanh toán hoặc không còn hợp lệ.`);
+        }
+        
+        // Kiểm tra chưa hết hạn giữ chỗ
+        if (new Date(seat.reserved_until) <= now) {
+          throw new Error(`Ghế ${seat.seat_number} đã hết hạn giữ chỗ.`);
+        }
+        
         total += Number(seat.price);
       }
 
@@ -301,7 +325,7 @@ class TicketService {
         const paymentLink = await payos.paymentRequests.create(payosOrder);
         checkoutUrl = paymentLink.checkoutUrl;
       } catch (payErr) {
-        logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`);
+        logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`, payErr);
         throw new Error(`Không thể tạo liên kết thanh toán PayOS: ${payErr.message}`);
       }
 

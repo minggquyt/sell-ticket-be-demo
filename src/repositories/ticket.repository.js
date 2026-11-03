@@ -637,6 +637,18 @@ class TicketRepository {
       [price, eventId, (zoneName || '').toUpperCase()]
     );
   }
+
+  // FIX #5: Đếm số vé đã mua thành công của user (để enforce MAX_TICKETS_PER_USER)
+  async countSuccessfulTicketsByUser(userId, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT COUNT(*) 
+       FROM order_items oi
+       INNER JOIN orders o ON oi.order_code = o.order_code
+       WHERE o.user_id = $1 AND o.status = 'SUCCESS';`,
+      [userId]
+    );
+    return parseInt(result.rows[0].count, 10);
+  }
 }
 
 module.exports = new TicketRepository();
