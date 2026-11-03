@@ -2,7 +2,32 @@ const pool = require('../config/db');
 const logger = require('../utils/logger');
 
 class TicketRepository {
-  // Events
+  // ==================== Transaction Helpers ====================
+  async beginTransaction() {
+    const client = await pool.connect();
+    await client.query('BEGIN');
+    return client;
+  }
+
+  async commitTransaction(client) {
+    try {
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+  }
+
+  async rollbackTransaction(client) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Bỏ qua lỗi rollback nếu connection đã đóng
+    } finally {
+      client.release();
+    }
+  }
+
+  // ==================== Events ====================
   async getAllEvents() {
     const result = await pool.query(
       'SELECT * FROM events ORDER BY created_at DESC;'
@@ -85,7 +110,7 @@ class TicketRepository {
     return true;
   }
 
-  // Seats
+  // ==================== Seats Queries ====================
   async getSeatsByEvent(eventId) {
     const result = await pool.query(
       'SELECT * FROM seats WHERE event_id = $1 ORDER BY seat_number ASC;',
@@ -160,7 +185,228 @@ class TicketRepository {
     return result.rows.length > 0;
   }
 
-  // Orders
+  // ==================== Seat Locking & Holding ====================
+  async lockAvailableSeats(seatIds, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT id, seat_number, price, zone_name
+       FROM seats
+       WHERE id = ANY($1::uuid[])
+         AND status = 'AVAILABLE'
+       ORDER BY id ASC
+       FOR UPDATE SKIP LOCKED;`,
+      [seatIds]
+    );
+    return result.rows;
+  }
+
+  async reserveSeats(userId, reservedUntil, seatIds, dbClient = pool) {
+    const result = await dbClient.query(
+      `UPDATE seats 
+       SET status = 'RESERVED', reserved_by = $1, reserved_until = $2
+       WHERE id = ANY($3::uuid[])
+       RETURNING id, seat_number, status, reserved_until, price;`,
+      [userId, reservedUntil, seatIds]
+    );
+    return result.rows;
+  }
+
+  async getSeatNumbersByIds(seatIds, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT seat_number FROM seats WHERE id = ANY($1::uuid[])`,
+      [seatIds]
+    );
+    return result.rows.map((s) => s.seat_number);
+  }
+
+  async confirmAvailableSeatsHold(userId, reservedUntil, confirmSeatIds, dbClient = pool) {
+    const result = await dbClient.query(
+      `UPDATE seats
+       SET status = 'RESERVED', reserved_by = $1, reserved_until = $2
+       WHERE id = ANY($3::uuid[])
+         AND status = 'AVAILABLE'
+       RETURNING id, seat_number, status, reserved_until, price;`,
+      [userId, reservedUntil, confirmSeatIds]
+    );
+    return result.rows;
+  }
+
+  async reserveSeatsByZoneDemands(userId, eventId, validRequests, now, until, dbClient = pool) {
+    const query = `
+      WITH user_active_hold AS (
+        SELECT 1 FROM seats 
+        WHERE reserved_by = $1 
+          AND status IN ('RESERVED', 'PAYMENT_PROCESSING') 
+          AND reserved_until > $2
+        LIMIT 1
+      ),
+      zone_demands AS (
+        SELECT zone_name, quantity::int AS required_qty 
+        FROM jsonb_to_recordset($3::jsonb) AS x(zone_name text, quantity int)
+        WHERE NOT EXISTS (SELECT 1 FROM user_active_hold)
+      ),
+      locked_seats AS (
+        SELECT s.id, s.seat_number, s.zone_name, s.price
+        FROM zone_demands zd
+        CROSS JOIN LATERAL (
+          SELECT id, seat_number, zone_name, price
+          FROM seats
+          WHERE event_id = $4
+            AND zone_name = zd.zone_name
+            AND status = 'AVAILABLE'
+          ORDER BY seat_number ASC
+          LIMIT zd.required_qty
+          FOR UPDATE SKIP LOCKED
+        ) s
+      ),
+      checked_availability AS (
+        SELECT zd.zone_name, zd.required_qty, COUNT(ls.id) AS locked_qty
+        FROM zone_demands zd
+        LEFT JOIN locked_seats ls ON zd.zone_name = ls.zone_name
+        GROUP BY zd.zone_name, zd.required_qty
+      )
+      UPDATE seats
+      SET status = 'RESERVED', reserved_by = $1, reserved_until = $5
+      WHERE id IN (SELECT id FROM locked_seats)
+        AND NOT EXISTS (
+          SELECT 1 FROM checked_availability WHERE locked_qty < required_qty
+        )
+      RETURNING id, seat_number, zone_name, price, status, reserved_until;
+    `;
+    const result = await dbClient.query(query, [
+      userId,
+      now,
+      JSON.stringify(validRequests),
+      eventId,
+      until
+    ]);
+    return result.rows;
+  }
+
+  // ==================== Seat Release & Order Cancellation ====================
+  async getSeatIdsByOrderCode(orderCode, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT seat_id FROM order_items WHERE order_code = $1;`,
+      [orderCode]
+    );
+    return result.rows.map((r) => r.seat_id);
+  }
+
+  async getHeldSeatIdsByUserId(userId, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT id FROM seats WHERE reserved_by = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING');`,
+      [userId]
+    );
+    return result.rows.map((r) => r.id);
+  }
+
+  async releaseSeatsByIds(effectiveSeatIds, userId = null, dbClient = pool) {
+    const result = await dbClient.query(
+      `WITH target_seats AS (
+        SELECT id, current_order_code
+        FROM seats
+        WHERE id = ANY($1::uuid[])
+          AND (reserved_by = $2 OR $2 IS NULL)
+          AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
+        FOR UPDATE
+      )
+      UPDATE seats s
+      SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
+      FROM target_seats ts
+      WHERE s.id = ts.id
+      RETURNING s.id, s.seat_number, ts.current_order_code;`,
+      [effectiveSeatIds, userId || null]
+    );
+    return result.rows;
+  }
+
+  async cancelOrExpireProcessingOrders(orderCodes, dbClient = pool) {
+    const result = await dbClient.query(
+      `UPDATE orders
+       SET status = CASE WHEN expires_at <= NOW() THEN 'EXPIRED'::order_status ELSE 'CANCELLED'::order_status END
+       WHERE order_code = ANY($1::bigint[]) AND status = 'PAYMENT_PROCESSING'
+       RETURNING order_code, status;`,
+      [orderCodes]
+    );
+    return result.rows;
+  }
+
+  // ==================== Checkout Seats ====================
+  async getSeatsByIdsForUpdate(seatIds, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT * FROM seats WHERE id = ANY($1::uuid[]) ORDER BY id ASC FOR UPDATE;`,
+      [seatIds]
+    );
+    return result.rows;
+  }
+
+  async updateSeatsToPaymentProcessing(seatReservedUntil, orderCode, seatIds, dbClient = pool) {
+    await dbClient.query(
+      `UPDATE seats 
+       SET status = 'PAYMENT_PROCESSING', reserved_until = $1, current_order_code = $2 
+       WHERE id = ANY($3::uuid[]);`,
+      [seatReservedUntil, orderCode, seatIds]
+    );
+  }
+
+  // ==================== Webhook & Payment Flow ====================
+  async getOrderByCodeForUpdate(orderCode, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT * FROM orders WHERE order_code = $1 FOR UPDATE;`,
+      [orderCode]
+    );
+    return result.rows[0] || null;
+  }
+
+  async releaseSeatsByOrderCode(orderCode, dbClient = pool) {
+    const result = await dbClient.query(
+      `UPDATE seats
+       SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
+       WHERE current_order_code = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
+       RETURNING id, seat_number;`,
+      [orderCode]
+    );
+    return result.rows;
+  }
+
+  async getOrderItemsWithSeatsForUpdate(orderCode, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT 
+        oi.id AS order_item_id,
+        oi.seat_id,
+        oi.price AS item_price,
+        s.id AS current_seat_id,
+        s.seat_number,
+        s.zone_name,
+        s.event_id,
+        s.status AS seat_status,
+        s.reserved_by,
+        s.current_order_code,
+        e.event_type
+      FROM order_items oi
+      JOIN seats s ON oi.seat_id = s.id
+      JOIN events e ON s.event_id = e.id
+      WHERE oi.order_code = $1
+      ORDER BY oi.id ASC
+      FOR UPDATE OF oi, s;`,
+      [orderCode]
+    );
+    return result.rows;
+  }
+
+  async markSeatsAsSold(seatIds, orderCode, dbClient = pool) {
+    const result = await dbClient.query(
+      `UPDATE seats 
+       SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
+       WHERE id = ANY($1::uuid[]) 
+         AND current_order_code = $2 
+         AND status = 'PAYMENT_PROCESSING'
+       RETURNING id, seat_number;`,
+      [seatIds, orderCode]
+    );
+    return result.rows;
+  }
+
+  // ==================== Orders ====================
   async getUserOrderHistory(userId) {
     const result = await pool.query(
       `SELECT 
@@ -325,7 +571,6 @@ class TicketRepository {
       citizenId
     };
 
-    
     logger.payment('CREATE_ORDER_BEFORE_INSERT', `Payload: ${JSON.stringify(logPayload)}`);
 
     const result = await dbClient.query(
@@ -355,6 +600,41 @@ class TicketRepository {
     await dbClient.query(
       `UPDATE orders SET status = $1 WHERE order_code = $2;`,
       [status, orderCode]
+    );
+  }
+
+  // ==================== Event Management Helpers ====================
+  async createSeat(eventId, seatNumber, zoneName, price, dbClient = pool) {
+    await dbClient.query(
+      `INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+       VALUES ($1, $2, $3, $4, 'AVAILABLE');`,
+      [eventId, seatNumber, zoneName, price]
+    );
+  }
+
+  async countUnavailableSeatsByEvent(eventId, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT COUNT(*) FROM seats WHERE event_id = $1 AND status != 'AVAILABLE';`,
+      [eventId]
+    );
+    return parseInt(result.rows[0].count, 10);
+  }
+
+  async deleteSeatsByEventId(eventId, dbClient = pool) {
+    await dbClient.query('DELETE FROM seats WHERE event_id = $1;', [eventId]);
+  }
+
+  async updateAvailableSeatsPrice(eventId, price, dbClient = pool) {
+    await dbClient.query(
+      `UPDATE seats SET price = $1 WHERE event_id = $2 AND status = 'AVAILABLE';`,
+      [price, eventId]
+    );
+  }
+
+  async updateAvailableZoneSeatsPrice(eventId, zoneName, price, dbClient = pool) {
+    await dbClient.query(
+      `UPDATE seats SET price = $1 WHERE event_id = $2 AND UPPER(zone_name) = $3 AND status = 'AVAILABLE';`,
+      [price, eventId, (zoneName || '').toUpperCase()]
     );
   }
 }
