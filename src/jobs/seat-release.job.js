@@ -1,8 +1,9 @@
 const ticketRepository = require('../repositories/ticket.repository');
 const payos = require('../config/payos');
 const logger = require('../utils/logger');
+const { SEAT_RELEASE_JOB_INTERVAL_MS } = require('../config/constants');
 
-// Background Job: Quét ghế và đơn hàng hết hạn định kỳ mỗi 15 giây
+// Background Job: Quét ghế và đơn hàng hết hạn định kỳ
 function startSeatReleaseJob() {
   setInterval(async () => {
     try {
@@ -19,15 +20,17 @@ function startSeatReleaseJob() {
           try {
             await payos.paymentRequests.cancel(Number(code), 'Order expired');
             logger.payment('CANCEL', `Đã tự động đóng link PayOS cho đơn hết hạn #${code}`);
-          } catch {
-            // Bỏ qua nếu link PayOS đã tự hết hạn hoặc đã hủy trước đó
+          } catch (cancelErr) {
+            // FIX #4: Log lỗi thay vì bỏ qua hoàn toàn
+            logger.error('PAYOS_CANCEL', `Không thể hủy PayOS link #${code}: ${cancelErr.message}`);
           }
         }
       }
     } catch (err) {
-      logger.error('CRON_AUTO_RELEASE', err.message);
+      // FIX #4: Log đầy đủ stack trace
+      logger.error('CRON_AUTO_RELEASE', err.message, err);
     }
-  }, 15 * 1000);
+  }, SEAT_RELEASE_JOB_INTERVAL_MS); // FIX #9: Dùng constant
 }
 
 module.exports = { startSeatReleaseJob };

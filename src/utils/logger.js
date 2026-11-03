@@ -22,9 +22,10 @@ function getTimestamp() {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${padMs(d.getMilliseconds())}`;
 }
 
+const { MAX_RECENT_LOGS, SSE_CLIENT_TIMEOUT_MS } = require('../config/constants');
+
 const recentLogs = [];
-const MAX_RECENT_LOGS = 200;
-const sseClients = new Set();
+const sseClients = new Map(); // FIX #6: Map để lưu thêm timestamp
 let logCounter = 0;
 
 function broadcast(logEntry) {
@@ -34,18 +35,35 @@ function broadcast(logEntry) {
   }
 
   const payload = `data: ${JSON.stringify({ type: 'LOG', log: logEntry })}\n\n`;
-  for (const client of sseClients) {
+  const now = Date.now();
+  
+  // FIX #6: Cleanup dead connections và gửi log
+  for (const [client, lastActive] of sseClients.entries()) {
+    // Xóa connection quá lâu không response
+    if (now - lastActive > SSE_CLIENT_TIMEOUT_MS) {
+      sseClients.delete(client);
+      try {
+        client.end();
+      } catch (err) {
+        // Ignore close error
+      }
+      continue;
+    }
+    
     try {
       client.write(payload);
+      sseClients.set(client, now); // Update last active time
     } catch (err) {
       sseClients.delete(client);
+      // FIX #4: Log error thay vì bỏ qua
+      console.error(`[Logger] Failed to broadcast to SSE client: ${err.message}`);
     }
   }
 }
 
 const logger = {
   addSSEClient(res) {
-    sseClients.add(res);
+    sseClients.set(res, Date.now()); // FIX #6: Lưu timestamp
   },
 
   removeSSEClient(res) {

@@ -1,0 +1,54 @@
+fix: Address 9/10 critical code review findings
+
+BREAKING CHANGE: JWT_SECRET is now required in .env, system will not start without it
+
+## Security Fixes (CRITICAL)
+- Fix #1: Prevent race condition in checkout with strict ownership validation
+  - Separate checks for reserved_by, status, and reserved_until
+  - Transaction lock ensures atomicity
+- Fix #2: Enforce JWT_SECRET requirement
+  - System throws error and exits if JWT_SECRET not configured
+  - Prevents running with default weak secret
+
+## High Priority Fixes
+- Fix #3: PayOS webhook signature verification (already implemented, improved logging)
+- Fix #4: Replace empty catch blocks with proper error logging
+  - All errors now logged with full stack traces
+  - Affected: logger.js, seat-release.job.js, ticket.service.js
+- Fix #5: Enforce MAX_TICKETS_PER_USER at database level
+  - Added countSuccessfulTicketsByUser() query
+  - Prevents bypassing 4-ticket limit through multiple sessions
+
+## Medium Priority Fixes
+- Fix #6: SSE memory leak prevention
+  - Changed Set to Map<client, timestamp>
+  - Auto-cleanup connections older than 60s
+  - Properly close dead connections
+- Fix #7: Database performance optimization
+  - Created indexes for frequent queries
+  - Migration: migrations/add_performance_indexes.sql
+
+## Low Priority Fixes
+- Fix #9: Extract magic numbers to constants
+  - SEAT_RELEASE_JOB_INTERVAL_MS, SSE_HEARTBEAT_INTERVAL_MS, etc.
+  - Improves maintainability
+
+## Manual Actions Required
+1. Apply performance indexes: `psql $DATABASE_URL -f migrations/add_performance_indexes.sql`
+2. Apply data constraints: `psql $DATABASE_URL -f migrations/add_data_constraints.sql`
+3. Ensure JWT_SECRET is set in .env before deployment
+
+## Files Changed
+- src/config/constants.js
+- src/services/ticket.service.js
+- src/repositories/ticket.repository.js
+- src/controllers/ticket.controller.js
+- src/utils/logger.js
+- src/jobs/seat-release.job.js
+- app.js
+- migrations/add_performance_indexes.sql (new)
+- migrations/add_data_constraints.sql (new)
+- CODE_REVIEW_FIXES.md (new)
+- FIXES_SUMMARY.md (new)
+
+Refs: Code Review 2026-11-03

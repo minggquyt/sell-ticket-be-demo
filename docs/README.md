@@ -17,6 +17,15 @@ docs/
 │   ├── seat-booking.md          # Seat Booking APIs (Hold, Confirm, Release)
 │   ├── orders-payment.md        # Order & Payment APIs (Checkout, History, Webhook)
 │   └── admin.md                 # Admin APIs (Create/Delete Events)
+├── fixes/                       # 🆕 Code Review Fixes (v1.3)
+│   ├── README.md                # Index của fixes
+│   ├── CODE_REVIEW_FIXES.md     # Chi tiết đầy đủ 10 phát hiện
+│   ├── FIXES_SUMMARY.md         # Tóm tắt nhanh
+│   └── COMMIT_MESSAGE.txt       # Git commit message
+├── migrations/                  # 🆕 Database Migrations
+│   ├── README.md                # Migration guide
+│   ├── add_performance_indexes.sql
+│   └── add_data_constraints.sql
 └── versions/                    # Version History
     └── version-1.md             # Version 1 (v1.1 & v1.2)
 ```
@@ -40,6 +49,15 @@ docs/
 | Version | File | Description |
 |---------|------|-------------|
 | **Version 1** | [version-1.md](./versions/version-1.md) | v1.1 (initial) & v1.2 (refactored) |
+
+### Code Review & Fixes (🆕 v1.3)
+
+| Topic | File | Description |
+|-------|------|-------------|
+| **Fixes Overview** | [fixes/README.md](./fixes/README.md) | Tổng quan các fixes từ code review |
+| **Detailed Fixes** | [fixes/CODE_REVIEW_FIXES.md](./fixes/CODE_REVIEW_FIXES.md) | Chi tiết 10 phát hiện và giải pháp |
+| **Quick Summary** | [fixes/FIXES_SUMMARY.md](./fixes/FIXES_SUMMARY.md) | Tóm tắt nhanh cho developers |
+| **Database Migrations** | [migrations/README.md](./migrations/README.md) | Performance indexes & constraints |
 
 ---
 

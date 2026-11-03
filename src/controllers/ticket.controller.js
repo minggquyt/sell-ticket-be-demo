@@ -241,11 +241,13 @@ exports.payosWebhook = async (req, res) => {
     const webhookData = req.body;
     logger.payment('WEBHOOK', `Nhận Webhook từ PayOS: ${JSON.stringify(webhookData)}`);
 
+    // FIX #3: Webhook signature verification đã có sẵn
     let verifiedData;
     try {
       verifiedData = await payos.webhooks.verify(webhookData);
     } catch (verifyErr) {
-      logger.payment('WARN', `Từ chối Webhook do chữ ký không hợp lệ (hoặc ping test): ${verifyErr.message}`);
+      // FIX #4: Log chi tiết lỗi verify
+      logger.error('WEBHOOK_VERIFY', `Từ chối Webhook do chữ ký không hợp lệ: ${verifyErr.message}`, verifyErr);
       return res.status(200).json({
         success: false,
         message: 'Chữ ký webhook không hợp lệ hoặc là ping test'
@@ -266,6 +268,7 @@ exports.payosWebhook = async (req, res) => {
       message: 'Đã nhận và xử lý webhook thành công'
     });
   } catch (err) {
+    // FIX #4: Log đầy đủ stack trace
     logger.error('PAYOS_WEBHOOK', err.message, err);
     return res.status(200).json({ success: false, message: 'Đã nhận webhook (lỗi xử lý nội bộ)' });
   }
