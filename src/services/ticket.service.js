@@ -5,7 +5,6 @@ const logger = require('../utils/logger');
 const {
   SEAT_HOLD_DURATION_SECONDS,
   PAYMENT_TIMEOUT_SECONDS,
-  PAYMENT_GRACE_SECONDS,
 } = require('../config/constants');
 
 class TicketService {
@@ -329,7 +328,9 @@ class TicketService {
 
       if (uniqueOrderCodes.length > 0) {
         await client.query(
-          `UPDATE orders SET status = 'CANCELLED' WHERE order_code = ANY($1::bigint[]) AND status = 'PAYMENT_PROCESSING';`,
+          `UPDATE orders
+           SET status = CASE WHEN expires_at <= NOW() THEN 'EXPIRED'::order_status ELSE 'CANCELLED'::order_status END
+           WHERE order_code = ANY($1::bigint[]) AND status = 'PAYMENT_PROCESSING';`,
           [uniqueOrderCodes]
         );
       }
@@ -401,7 +402,7 @@ class TicketService {
       const nowSec = Math.floor(Date.now() / 1000);
       const expiredAt = nowSec + PAYMENT_TIMEOUT_SECONDS;
       const paymentTimeout = new Date(expiredAt * 1000);
-      const seatReservedUntil = new Date((expiredAt + PAYMENT_GRACE_SECONDS) * 1000);
+      const seatReservedUntil = paymentTimeout;
 
       const order = await ticketRepository.createOrder(userId, total, paymentTimeout, phone, citizenId, client);
       const orderCode = Number(order.order_code);
@@ -478,16 +479,22 @@ class TicketService {
       
       const order = orderRes.rows[0];
 
-      if (order.status === 'SUCCESS' && isSuccess) {
+      if (order.status === 'SUCCESS') {
         await client.query('COMMIT');
         logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái SUCCESS từ trước.`);
         return { status: 'SUCCESS', orderCode: numericOrderCode };
       }
 
-      if ((order.status === 'REFUND_PENDING' || order.status === 'REFUNDED') && isSuccess) {
+      if (order.status === 'REFUNDED') {
         await client.query('COMMIT');
-        logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái ${order.status} từ trước.`);
-        return { status: order.status, orderCode: numericOrderCode };
+        logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái REFUNDED từ trước.`);
+        return { status: 'REFUNDED', orderCode: numericOrderCode };
+      }
+
+      if (order.status === 'REFUND_PENDING') {
+        await client.query('COMMIT');
+        logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái REFUND_PENDING từ trước.`);
+        return { status: 'REFUND_PENDING', orderCode: numericOrderCode };
       }
 
       // Kiểm tra khớp số tiền thanh toán nếu có paidAmount
@@ -501,221 +508,126 @@ class TicketService {
       let finalOrderStatus = order.status;
 
       if (validSuccess) {
-        // Lấy chi tiết các vé và ghế hiện tại của đơn hàng, kèm thông tin event_type (khóa dòng để đảm bảo tính toàn vẹn)
-        const orderItemsRes = await client.query(`
-          SELECT 
-            oi.id AS order_item_id,
-            oi.seat_id,
-            oi.price AS item_price,
-            s.id AS current_seat_id,
-            s.seat_number,
-            s.zone_name,
-            s.event_id,
-            s.status AS seat_status,
-            s.reserved_by,
-            s.current_order_code,
-            e.event_type
-          FROM order_items oi
-          JOIN seats s ON oi.seat_id = s.id
-          JOIN events e ON s.event_id = e.id
-          WHERE oi.order_code = $1
-          ORDER BY oi.id ASC
-          FOR UPDATE OF oi, s;
-        `, [numericOrderCode]);
-
-        const orderItems = orderItemsRes.rows;
-        const eventType = orderItems[0]?.event_type || 'SEAT_BASED';
-        const eventId = orderItems[0]?.event_id;
-
-        // ĐIỀU KIỆN CHẶT CHẼ CHO TRƯỜNG HỢP 1 (Thanh toán bình thường trong hạn):
-        // 1. Đơn đang ở trạng thái PAYMENT_PROCESSING
-        // 2. Toàn bộ ghế trong đơn vẫn ĐANG ĐƯỢC GIỮ CHUẨN XÁC bởi chính đơn này (current_order_code = numericOrderCode và seat_status = PAYMENT_PROCESSING)
-        const isStillActivelyHeld =
-          order.status === 'PAYMENT_PROCESSING' &&
-          orderItems.length > 0 &&
-          orderItems.every(
-            (item) =>
-              item.seat_status === 'PAYMENT_PROCESSING' &&
-              Number(item.current_order_code) === numericOrderCode
+        // TRƯỜNG HỢP A: Đơn đã ở trạng thái CANCELLED, EXPIRED hoặc FAILED từ trước ->
+        // Chuyển tiếp đúng trình tự vòng đời: CANCELLED / EXPIRED / FAILED -> REFUND_PENDING (không cấp vé dù ghế còn trống)
+        if (['CANCELLED', 'EXPIRED', 'FAILED'].includes(order.status)) {
+          const prevStatus = order.status;
+          await client.query(`
+            UPDATE seats
+            SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
+            WHERE current_order_code = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING');
+          `, [numericOrderCode]);
+          await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
+          finalOrderStatus = 'REFUND_PENDING';
+          logger.payment(
+            'REFUND_PENDING',
+            `Đơn #${numericOrderCode} đã ở trạng thái ${prevStatus} nhưng ghi nhận tiền vào -> Chuyển trạng thái ${prevStatus} -> REFUND_PENDING (Chờ hoàn tiền)!`
           );
+        } else if (order.status === 'PAYMENT_PROCESSING') {
+          // Lấy chi tiết các vé và ghế hiện tại của đơn hàng (khóa dòng để đảm bảo tính toàn vẹn)
+          const orderItemsRes = await client.query(`
+            SELECT 
+              oi.id AS order_item_id,
+              oi.seat_id,
+              oi.price AS item_price,
+              s.id AS current_seat_id,
+              s.seat_number,
+              s.zone_name,
+              s.event_id,
+              s.status AS seat_status,
+              s.reserved_by,
+              s.current_order_code,
+              e.event_type
+            FROM order_items oi
+            JOIN seats s ON oi.seat_id = s.id
+            JOIN events e ON s.event_id = e.id
+            WHERE oi.order_code = $1
+            ORDER BY oi.id ASC
+            FOR UPDATE OF oi, s;
+          `, [numericOrderCode]);
 
-        if (isStillActivelyHeld) {
-          // TRƯỜNG HỢP 1: Cấp vé bình thường
-          const seatIdsToSell = orderItems.map((item) => item.current_seat_id);
-          const seatRes = await client.query(`
-            UPDATE seats 
-            SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
-            WHERE id = ANY($1::uuid[]) 
-              AND current_order_code = $2 
-              AND status = 'PAYMENT_PROCESSING'
-            RETURNING id, seat_number;
-          `, [seatIdsToSell, numericOrderCode]);
+          const orderItems = orderItemsRes.rows;
+          const isExpiredByTime = Boolean(order.expires_at && new Date(order.expires_at) <= new Date());
 
-          if (seatRes.rows.length === orderItems.length) {
-            await ticketRepository.updateOrderStatus(numericOrderCode, 'SUCCESS', client);
-            finalOrderStatus = 'SUCCESS';
-            updatedSeats = seatRes.rows;
-            logger.payment('SUCCESS', `Đơn #${numericOrderCode} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
-          } else {
-            // Không cập nhật đủ 100% ghế -> bảo vệ chống trùng ghế, chuyển REFUND_PENDING
-            await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
-            finalOrderStatus = 'REFUND_PENDING';
-            logger.payment('WARN', `Đơn #${numericOrderCode} không thể cập nhật đủ ${orderItems.length} ghế thành SOLD -> Chuyển sang REFUND_PENDING!`);
-          }
-        }
-        // TRƯỜNG HỢP 2: Đơn đã bị CANCELLED / EXPIRED / FAILED hoặc BỊ MẤT QUYỀN GIỮ CHỖ nhưng khách vẫn chuyển tiền!
-        else {
-          // Kiểm tra xem tất cả các ghế ban đầu còn AVAILABLE không
-          const allOriginalSeatsAvailable =
-            orderItems.length > 0 && orderItems.every((item) => item.seat_status === 'AVAILABLE');
+          // Điều kiện hợp lệ duy nhất để PAYMENT_PROCESSING -> SUCCESS:
+          // 1. Chưa hết hạn 2 phút (expires_at > NOW)
+          // 2. Toàn bộ ghế vẫn đang ở PAYMENT_PROCESSING thuộc đúng đơn này
+          const isStillActivelyHeld =
+            !isExpiredByTime &&
+            orderItems.length > 0 &&
+            orderItems.every(
+              (item) =>
+                item.seat_status === 'PAYMENT_PROCESSING' &&
+                Number(item.current_order_code) === numericOrderCode
+            );
 
-          if (allOriginalSeatsAvailable) {
-            // Trường hợp 2.1: Toàn bộ ghế ban đầu vẫn còn 100% trống (cả SEAT_BASED lẫn ZONE_BASED)
+          if (isStillActivelyHeld) {
             const seatIdsToSell = orderItems.map((item) => item.current_seat_id);
             const seatRes = await client.query(`
-              UPDATE seats
-              SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
-              WHERE id = ANY($1::uuid[]) AND status = 'AVAILABLE'
-              RETURNING id, seat_number, zone_name;
-            `, [seatIdsToSell]);
+              UPDATE seats 
+              SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
+              WHERE id = ANY($1::uuid[]) 
+                AND current_order_code = $2 
+                AND status = 'PAYMENT_PROCESSING'
+              RETURNING id, seat_number;
+            `, [seatIdsToSell, numericOrderCode]);
 
             if (seatRes.rows.length === orderItems.length) {
               await ticketRepository.updateOrderStatus(numericOrderCode, 'SUCCESS', client);
               finalOrderStatus = 'SUCCESS';
               updatedSeats = seatRes.rows;
-              logger.payment(
-                'SUCCESS',
-                `[LATE_PAYMENT_ACCEPTED] Đơn #${numericOrderCode} (${eventType}) chuyển tiền muộn nhưng toàn bộ ${updatedSeats.length} ghế [${updatedSeats.map((s) => s.seat_number).join(', ')}] vẫn 100% AVAILABLE -> Cấp vé SUCCESS!`
-              );
+              logger.payment('SUCCESS', `Đơn #${numericOrderCode} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
             } else {
-              await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
-              finalOrderStatus = 'REFUND_PENDING';
-              logger.payment(
-                'WARN',
-                `[REFUND_PENDING] Đơn #${numericOrderCode} (${eventType}) chuyển tiền muộn nhưng không đủ số ghế AVAILABLE -> Chuyển REFUND_PENDING!`
-              );
-            }
-          } else if (eventType === 'ZONE_BASED' && orderItems.length > 0) {
-            // Trường hợp 2.2: Sự kiện ZONE_BASED, một số ghế ban đầu đã bị người khác chọn/mua,
-            // nhưng trong Zone đó vẫn còn ghế trống khác. Ta sẽ tự động bù ghế trống khác trong cùng Zone!
-            const keptSeats = orderItems.filter((i) => i.seat_status === 'AVAILABLE');
-            const itemsNeedingReplacement = orderItems.filter((i) => i.seat_status !== 'AVAILABLE');
-
-            // Đếm số lượng ghế cần bù cho từng zone_name
-            const neededByZone = {};
-            for (const item of itemsNeedingReplacement) {
-              const zName = item.zone_name;
-              neededByZone[zName] = (neededByZone[zName] || 0) + 1;
-            }
-
-            let canReplaceAll = true;
-            const replacementMap = new Map(); // order_item_id -> newSeatRow
-            const excludeSeatIds = keptSeats.map((i) => i.current_seat_id);
-
-            for (const [zoneName, neededQty] of Object.entries(neededByZone)) {
-              const repRes = await client.query(`
-                SELECT id, seat_number, zone_name, price
-                FROM seats
-                WHERE event_id = $1
-                  AND zone_name = $2
-                  AND status = 'AVAILABLE'
-                  AND NOT (id = ANY($3::uuid[]))
-                ORDER BY seat_number ASC
-                LIMIT $4
-                FOR UPDATE SKIP LOCKED;
-              `, [eventId, zoneName, excludeSeatIds, neededQty]);
-
-              if (repRes.rows.length < neededQty) {
-                canReplaceAll = false;
-                break;
-              }
-
-              for (const newSeat of repRes.rows) {
-                excludeSeatIds.push(newSeat.id);
-              }
-
-              const itemsInZone = itemsNeedingReplacement.filter((i) => i.zone_name === zoneName);
-              for (let idx = 0; idx < neededQty; idx++) {
-                replacementMap.set(itemsInZone[idx].order_item_id, repRes.rows[idx]);
-              }
-            }
-
-            if (canReplaceAll) {
-              // Cập nhật lại order_items trỏ sang seat_id mới
-              for (const [orderItemId, newSeat] of replacementMap.entries()) {
-                await client.query(`
-                  UPDATE order_items
-                  SET seat_id = $1
-                  WHERE id = $2;
-                `, [newSeat.id, orderItemId]);
-              }
-
-              // Tổng hợp toàn bộ seat_id (ghế cũ còn trống + ghế mới bù vào)
-              const allFinalSeatIds = [
-                ...keptSeats.map((i) => i.current_seat_id),
-                ...Array.from(replacementMap.values()).map((s) => s.id),
-              ];
-
-              const seatRes = await client.query(`
+              // BƯỚC 1: PAYMENT_PROCESSING -> CANCELLED & nhả ghế
+              await ticketRepository.updateOrderStatus(numericOrderCode, 'CANCELLED', client);
+              await client.query(`
                 UPDATE seats
-                SET status = 'SOLD', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
-                WHERE id = ANY($1::uuid[]) AND status = 'AVAILABLE'
-                RETURNING id, seat_number, zone_name;
-              `, [allFinalSeatIds]);
-
-              if (seatRes.rows.length === allFinalSeatIds.length) {
-                updatedSeats = seatRes.rows;
-                await ticketRepository.updateOrderStatus(numericOrderCode, 'SUCCESS', client);
-                finalOrderStatus = 'SUCCESS';
-
-                const replacedDetails = Array.from(replacementMap.values()).map(s => `${s.zone_name}: ${s.seat_number}`).join(', ');
-                logger.payment(
-                  'SUCCESS',
-                  `[LATE_PAYMENT_ZONE_REALLOCATED] Đơn #${numericOrderCode} (ZONE_BASED) chuyển tiền muộn: Giữ ${keptSeats.length} ghế trống cũ, cấp bù ${replacementMap.size} ghế mới [${replacedDetails}] -> Cấp vé SUCCESS!`
-                );
-              } else {
-                await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
-                finalOrderStatus = 'REFUND_PENDING';
-                logger.payment(
-                  'WARN',
-                  `[REFUND_PENDING] Đơn #${numericOrderCode} (ZONE_BASED) không thể cập nhật đủ ${allFinalSeatIds.length} ghế thành SOLD -> Chuyển sang REFUND_PENDING!`
-                );
-              }
-            } else {
-              // Trong Zone không còn đủ số lượng ghế trống thay thế -> chuyển REFUND_PENDING
+                SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
+                WHERE current_order_code = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING');
+              `, [numericOrderCode]);
+              // BƯỚC 2: CANCELLED -> REFUND_PENDING
               await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
               finalOrderStatus = 'REFUND_PENDING';
-              logger.payment(
-                'WARN',
-                `[REFUND_PENDING] Đơn #${numericOrderCode} (ZONE_BASED) chuyển tiền muộn nhưng khu vực không còn đủ ghế trống thay thế -> Chuyển sang REFUND_PENDING (Chờ hoàn tiền)!`
-              );
+              logger.payment('REFUND_PENDING', `Đơn #${numericOrderCode} không giữ đủ ${orderItems.length} ghế -> Chuyển PAYMENT_PROCESSING -> CANCELLED -> REFUND_PENDING!`);
             }
           } else {
-            // Trường hợp 2.3: Sự kiện SEAT_BASED (ghế cố định), có ít nhất 1 ghế bị người khác chọn/mua
+            // Đơn vẫn đang mang nhãn PAYMENT_PROCESSING trong DB nhưng thực tế đã quá hạn 2 phút hoặc đã mất quyền giữ ghế:
+            // BƯỚC 1: Chuyển PAYMENT_PROCESSING -> EXPIRED (hoặc CANCELLED) và nhả ghế về AVAILABLE
+            const stepOneStatus = isExpiredByTime ? 'EXPIRED' : 'CANCELLED';
+            await ticketRepository.updateOrderStatus(numericOrderCode, stepOneStatus, client);
+            await client.query(`
+              UPDATE seats
+              SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL
+              WHERE current_order_code = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING');
+            `, [numericOrderCode]);
+            logger.payment(
+              stepOneStatus === 'EXPIRED' ? 'EXPIRED' : 'CANCEL',
+              `Đơn #${numericOrderCode} đã ${isExpiredByTime ? 'quá hạn 2 phút' : 'mất giữ chỗ'} -> Chuyển trạng thái PAYMENT_PROCESSING -> ${stepOneStatus} và nhả ghế về AVAILABLE.`
+            );
+
+            // BƯỚC 2: Chuyển từ EXPIRED / CANCELLED -> REFUND_PENDING (không nhảy cóc từ PAYMENT_PROCESSING)
             await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
             finalOrderStatus = 'REFUND_PENDING';
-            const conflictSeats = orderItems
-              .filter((i) => i.seat_status !== 'AVAILABLE')
-              .map((i) => `${i.seat_number}(${i.seat_status})`)
-              .join(', ');
             logger.payment(
-              'WARN',
-              `[REFUND_PENDING] Đơn #${numericOrderCode} (SEAT_BASED) chuyển tiền muộn nhưng ghế đã có người đụng tới [${conflictSeats}] -> Từ chối cấp vé, chuyển sang REFUND_PENDING (Chờ hoàn tiền)!`
+              'REFUND_PENDING',
+              `Đơn #${numericOrderCode} nhận được tiền sau khi ${stepOneStatus} -> Chuyển trạng thái ${stepOneStatus} -> REFUND_PENDING (Chờ hoàn tiền)!`
             );
           }
         }
       } else if (order.status === 'PAYMENT_PROCESSING') {
-        await ticketRepository.updateOrderStatus(numericOrderCode, 'FAILED', client);
-        finalOrderStatus = 'FAILED';
+        const isExpiredByTime = Boolean(order.expires_at && new Date(order.expires_at) <= new Date());
+        const failedOrExpired = isExpiredByTime ? 'EXPIRED' : 'FAILED';
+        await ticketRepository.updateOrderStatus(numericOrderCode, failedOrExpired, client);
+        finalOrderStatus = failedOrExpired;
 
         const seatRes = await client.query(`
           UPDATE seats 
           SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL 
-          WHERE current_order_code = $1
+          WHERE current_order_code = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
           RETURNING id, seat_number;
         `, [numericOrderCode]);
         updatedSeats = seatRes.rows;
-        logger.payment('CANCEL', `Đơn #${numericOrderCode} THẤT BẠI/HỦY! ${updatedSeats.length} ghế về AVAILABLE`);
+        logger.payment('CANCEL', `Đơn #${numericOrderCode} chuyển PAYMENT_PROCESSING -> ${failedOrExpired}! ${updatedSeats.length} ghế về AVAILABLE`);
       }
 
       await client.query('COMMIT');
@@ -744,40 +656,55 @@ class TicketService {
     if (
       order.order_status === 'PAYMENT_PROCESSING' ||
       order.order_status === 'CANCELLED' ||
-      order.order_status === 'EXPIRED'
+      order.order_status === 'EXPIRED' ||
+      order.order_status === 'FAILED'
     ) {
       try {
         const paymentInfo = await payos.paymentRequests.get(numericOrderCode);
-        if (paymentInfo?.status === 'PAID') {
+        const hasPaidFullAmount =
+          paymentInfo?.status === 'PAID' ||
+          (Number(paymentInfo?.amountPaid) >= Number(order.total_amount) && Number(order.total_amount) > 0);
+
+        if (hasPaidFullAmount) {
           await this.handlePaymentWebhook(
             numericOrderCode,
             true,
             paymentInfo.amountPaid || paymentInfo.amount
           );
           order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
-        } else if (
-          order.order_status === 'PAYMENT_PROCESSING' &&
-          (paymentInfo?.status === 'CANCELLED' || paymentInfo?.status === 'EXPIRED')
-        ) {
-          const client = await pool.connect();
-          try {
-            await client.query('BEGIN');
-            await client.query(
-              `UPDATE orders SET status = $1 WHERE order_code = $2 AND status = 'PAYMENT_PROCESSING';`,
-              [paymentInfo.status, numericOrderCode]
-            );
-            await client.query(
-              `UPDATE seats SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL WHERE current_order_code = $1;`,
-              [numericOrderCode]
-            );
-            await client.query('COMMIT');
-          } catch (txErr) {
-            await client.query('ROLLBACK');
-            logger.error('SYNC_ORDER_STATUS', txErr.message, txErr);
-          } finally {
-            client.release();
+        } else if (order.order_status === 'PAYMENT_PROCESSING') {
+          const isExpiredByTime = Boolean(order.expires_at && new Date(order.expires_at) <= new Date());
+          if (
+            paymentInfo?.status === 'CANCELLED' ||
+            paymentInfo?.status === 'EXPIRED' ||
+            isExpiredByTime
+          ) {
+            const nextStatus =
+              paymentInfo?.status === 'CANCELLED' && !isExpiredByTime ? 'CANCELLED' : 'EXPIRED';
+            const client = await pool.connect();
+            try {
+              await client.query('BEGIN');
+              await client.query(
+                `UPDATE orders SET status = $1 WHERE order_code = $2 AND status = 'PAYMENT_PROCESSING';`,
+                [nextStatus, numericOrderCode]
+              );
+              await client.query(
+                `UPDATE seats SET status = 'AVAILABLE', reserved_by = NULL, reserved_until = NULL, current_order_code = NULL WHERE current_order_code = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING');`,
+                [numericOrderCode]
+              );
+              await client.query('COMMIT');
+              logger.payment(
+                nextStatus === 'EXPIRED' ? 'EXPIRED' : 'CANCEL',
+                `Đồng bộ đơn #${numericOrderCode}: Chuyển trạng thái PAYMENT_PROCESSING -> ${nextStatus} và nhả ghế về AVAILABLE.`
+              );
+            } catch (txErr) {
+              await client.query('ROLLBACK');
+              logger.error('SYNC_ORDER_STATUS', txErr.message, txErr);
+            } finally {
+              client.release();
+            }
+            order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
           }
-          order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
         }
       } catch (err) {
         logger.payment('WARN', `Không thể đồng bộ trạng thái đơn #${numericOrderCode} từ PayOS: ${err.message}`);
