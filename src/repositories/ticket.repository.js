@@ -417,6 +417,10 @@ class TicketRepository {
         o.created_at,
         o.phone,
         o.citizen_id,
+        o.refund_bank_error,
+        o.refund_snapshot,
+        u.bank_short_name,
+        u.bank_account_no,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
@@ -431,11 +435,12 @@ class TicketRepository {
           ) FILTER (WHERE s.id IS NOT NULL), '[]'
         ) AS items
       FROM orders o
+      JOIN users u ON o.user_id = u.id
       LEFT JOIN order_items oi ON o.order_code = oi.order_code
       LEFT JOIN seats s ON oi.seat_id = s.id
       LEFT JOIN events e ON s.event_id = e.id
       WHERE o.user_id = $1
-      GROUP BY o.order_code, e.id
+      GROUP BY o.order_code, u.id, e.id
       ORDER BY o.created_at DESC;`,
       [userId]
     );
@@ -454,6 +459,14 @@ class TicketRepository {
         o.total_amount,
         o.status AS order_status,
         o.created_at,
+        o.refund_bank_error,
+        o.refund_snapshot,
+        u.bank_bin,
+        u.bank_short_name,
+        u.bank_name,
+        u.bank_logo,
+        u.bank_account_no,
+        u.bank_account_name,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
@@ -515,13 +528,42 @@ class TicketRepository {
     return result.rows;
   }
 
-  async confirmOrderRefund(orderCode) {
+  // Đóng băng TT ngân hàng tại thời điểm hoàn vào refund_snapshot (bằng chứng đối soát).
+  // Chỉ thành công khi TK hiện tại của khách TRÙNG với TK Admin vừa quét QR ($2..$4)
+  // -> chặn trường hợp khách đổi TK giữa lúc Admin đang mở modal.
+  async confirmOrderRefund(orderCode, { bankBin, bankAccountNo, bankAccountName, note, refundedBy }) {
     const result = await pool.query(
-      `UPDATE orders
-       SET status = 'REFUNDED'
+      `UPDATE orders o
+       SET status = 'REFUNDED',
+           refund_snapshot = jsonb_build_object(
+             'bankBin', u.bank_bin,
+             'bankShortName', u.bank_short_name,
+             'bankName', u.bank_name,
+             'bankAccountNo', u.bank_account_no,
+             'bankAccountName', u.bank_account_name,
+             'amount', o.total_amount,
+             'note', $5::text,
+             'refundedBy', $6::text,
+             'refundedAt', now()
+           )
+       FROM users u
+       WHERE o.user_id = u.id
+         AND o.order_code = $1
+         AND o.status = 'REFUND_PENDING'
+         AND o.refund_bank_error IS NULL
+         AND u.bank_bin = $2 AND u.bank_account_no = $3 AND u.bank_account_name = $4
+       RETURNING o.order_code, o.status, o.refund_snapshot;`,
+      [orderCode, bankBin, bankAccountNo, bankAccountName, note, refundedBy]
+    );
+    return result.rows[0] || null;
+  }
+
+  async markRefundBankError(orderCode, reason) {
+    const result = await pool.query(
+      `UPDATE orders SET refund_bank_error = $2
        WHERE order_code = $1 AND status = 'REFUND_PENDING'
-       RETURNING *;`,
-      [orderCode]
+       RETURNING order_code, refund_bank_error;`,
+      [orderCode, reason]
     );
     return result.rows[0] || null;
   }

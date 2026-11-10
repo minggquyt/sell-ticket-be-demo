@@ -336,20 +336,51 @@ exports.getAdminTickets = async (req, res) => {
   }
 };
 
+const cleanText = (v, max) => String(v ?? '').trim().slice(0, max);
+
 exports.confirmRefundOrder = async (req, res) => {
   try {
-    const updated = await ticketService.confirmOrderRefund(req.params.orderCode);
+    // TK Admin vừa quét QR: BE so khớp với TK hiện tại của khách trước khi đóng băng snapshot
+    const input = {
+      bankBin: cleanText(req.body?.bankBin, 6),
+      bankAccountNo: cleanText(req.body?.bankAccountNo, 25),
+      bankAccountName: cleanText(req.body?.bankAccountName, 100),
+      note: cleanText(req.body?.note, 255),
+      refundedBy: req.user.email || req.user.id,
+    };
+    if (!input.bankBin || !input.bankAccountNo || !input.bankAccountName) {
+      return res.status(400).json(new AdminErrorDTO('Thiếu thông tin ngân hàng đối soát. Vui lòng mở lại modal QR.').toJSON());
+    }
+    const updated = await ticketService.confirmOrderRefund(req.params.orderCode, input);
     return res.json({
       success: true,
       message: `Đã xác nhận hoàn tiền cho đơn #${updated.order_code} thành công.`,
       data: {
         orderCode: Number(updated.order_code),
         status: updated.status,
+        refundSnapshot: updated.refund_snapshot,
       },
     });
   } catch (err) {
     const errorDto = new AdminErrorDTO(err.message);
     return res.status(400).json(errorDto.toJSON());
+  }
+};
+
+exports.markRefundBankError = async (req, res) => {
+  try {
+    const reason = cleanText(req.body?.reason, 255);
+    if (reason.length < 3) {
+      return res.status(400).json(new AdminErrorDTO('Vui lòng nhập lý do sai thông tin tài khoản.').toJSON());
+    }
+    const updated = await ticketService.markRefundBankError(req.params.orderCode, reason);
+    return res.json({
+      success: true,
+      message: `Đã báo sai thông tin TK cho đơn #${updated.order_code}.`,
+      data: { orderCode: Number(updated.order_code), refundBankError: updated.refund_bank_error },
+    });
+  } catch (err) {
+    return res.status(400).json(new AdminErrorDTO(err.message).toJSON());
   }
 };
 
