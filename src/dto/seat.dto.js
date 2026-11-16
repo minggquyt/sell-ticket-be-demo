@@ -172,9 +172,9 @@ class SeatResponseDTO {
 class SeatHoldSuccessResponseDTO {
   constructor(result) {
     this.success = true;
-    this.code = result.code || 'FULLY_RESERVED';
     this.message = 'Đã giữ chỗ thành công.';
     this.data = {
+      code: result.code || 'FULLY_RESERVED',
       seatIds: result.reservedSeats.map(s => s.id),
       reserved_until: result.reservedUntil,
       seats: result.reservedSeats.map(s => new SeatResponseDTO(s).toJSON())
@@ -184,7 +184,6 @@ class SeatHoldSuccessResponseDTO {
   toJSON() {
     return {
       success: this.success,
-      code: this.code,
       message: this.message,
       data: this.data
     };
@@ -194,21 +193,20 @@ class SeatHoldSuccessResponseDTO {
 class PartialAvailabilityResponseDTO {
   constructor(result) {
     this.success = false;
-    this.code = 'PARTIAL_AVAILABILITY';
     this.message = result.message || 'Một số ghế bạn chọn vừa có người khác giữ.';
-    this.unavailableSeats = result.unavailableSeats;
-    this.availableSeats = result.availableSeats;
-    this.availableSeatIds = result.availableSeatIds;
+    this.data = {
+      code: 'PARTIAL_AVAILABILITY',
+      unavailableSeats: result.unavailableSeats,
+      availableSeats: result.availableSeats,
+      availableSeatIds: result.availableSeatIds
+    };
   }
 
   toJSON() {
     return {
       success: this.success,
-      code: this.code,
       message: this.message,
-      unavailableSeats: this.unavailableSeats,
-      availableSeats: this.availableSeats,
-      availableSeatIds: this.availableSeatIds
+      data: this.data
     };
   }
 }
@@ -216,15 +214,15 @@ class PartialAvailabilityResponseDTO {
 class SeatHoldErrorResponseDTO {
   constructor(code, message) {
     this.success = false;
-    this.code = code;
     this.message = message;
+    this.data = { code };
   }
 
   toJSON() {
     return {
       success: this.success,
-      code: this.code,
-      message: this.message
+      message: this.message,
+      data: this.data
     };
   }
 }

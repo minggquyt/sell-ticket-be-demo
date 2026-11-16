@@ -194,16 +194,17 @@ class LoginResponseDTO {
   constructor(token, user) {
     this.success = true;
     this.message = 'Đăng nhập thành công!';
-    this.token = token;
-    this.user = new UserResponseDTO(user).toJSON();
+    this.data = {
+      token,
+      user: new UserResponseDTO(user).toJSON()
+    };
   }
 
   toJSON() {
     return {
       success: this.success,
       message: this.message,
-      token: this.token,
-      user: this.user
+      data: this.data
     };
   }
 }

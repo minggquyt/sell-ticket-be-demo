@@ -2,6 +2,7 @@ const ticketService = require('../services/ticket.service');
 const payos = require('../config/payos');
 const logger = require('../utils/logger');
 const {
+  EventResponseDTO,
   EventListResponseDTO,
   EventSeatsResponseDTO,
   EventZonesResponseDTO,
@@ -412,7 +413,7 @@ exports.updateEvent = async (req, res) => {
     res.json({
       success: true,
       message: 'Cập nhật sự kiện thành công!',
-      data: event
+      data: new EventResponseDTO(event).toJSON()
     });
   } catch (err) {
     const errorDto = new AdminErrorDTO(err.message);
