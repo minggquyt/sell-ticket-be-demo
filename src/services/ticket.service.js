@@ -581,6 +581,7 @@ class TicketService {
       seatConfig,
       zoneConfigs,
       category,
+      city,
       time,
       min_price,
       max_price,
@@ -603,10 +604,11 @@ class TicketService {
         client
       );
 
-      await ticketRepository.updateEvent(
+      const updatedEvent = await ticketRepository.updateEvent(
         event.id,
         {
           category,
+          city,
           time,
           min_price,
           max_price,
@@ -646,7 +648,7 @@ class TicketService {
       }
 
       await ticketRepository.commitTransaction(client);
-      return event;
+      return updatedEvent || event;
     } catch (err) {
       await ticketRepository.rollbackTransaction(client);
       throw err;
@@ -663,6 +665,7 @@ class TicketService {
       seatConfig,
       zoneConfigs,
       category,
+      city,
       time,
       min_price,
       max_price,
@@ -685,6 +688,7 @@ class TicketService {
           start_time,
           event_type,
           category,
+          city,
           time,
           min_price,
           max_price,

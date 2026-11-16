@@ -51,6 +51,19 @@ class TicketRepository {
     return result.rows[0];
   }
 
+  // Chuyển tên (VD: "Âm nhạc") hoặc UUID sang UUID của categories/cities; tránh lỗi cast UUID khi FE gửi tên
+  async resolveRefId(table, value, dbClient = pool) {
+    if (!value) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    const allowed = table === 'categories' ? 'categories' : 'cities';
+    const res = await dbClient.query(
+      `SELECT id FROM ${allowed} WHERE id::text = $1 OR LOWER(name) = LOWER($1) LIMIT 1;`,
+      [str]
+    );
+    return res.rows[0]?.id || null;
+  }
+
   async updateEvent(eventId, eventData, dbClient = pool) {
     const {
       title,
@@ -59,6 +72,7 @@ class TicketRepository {
       start_time,
       event_type,
       category,
+      city,
       time,
       min_price,
       max_price,
@@ -70,32 +84,45 @@ class TicketRepository {
       thumbnails,
     } = eventData;
 
+    const resolvedCategory = await this.resolveRefId('categories', category, dbClient);
+    const resolvedCity = await this.resolveRefId('cities', city, dbClient);
+
     const result = await dbClient.query(
-      `UPDATE events
-       SET title = COALESCE($1, title),
-           description = COALESCE($2, description),
-           location = COALESCE($3, location),
-           start_time = COALESCE($4, start_time),
-           event_type = COALESCE($5, event_type),
-           category = COALESCE($6, category),
-           "time" = COALESCE($7, "time"),
-           min_price = COALESCE($8, min_price),
-           max_price = COALESCE($9, max_price),
-           image = COALESCE($10, image),
-           banner = COALESCE($11, banner),
-           organizer = COALESCE($12, organizer),
-           highlights = COALESCE($13, highlights),
-           rules = COALESCE($14, rules),
-           thumbnails = COALESCE($15, thumbnails)
-       WHERE id = $16
-       RETURNING *;`,
+      `WITH updated AS (
+         UPDATE events
+         SET title = COALESCE($1, title),
+             description = COALESCE($2, description),
+             location = COALESCE($3, location),
+             start_time = COALESCE($4, start_time),
+             event_type = COALESCE($5, event_type),
+             category = COALESCE($6, category),
+             city = COALESCE($7, city),
+             "time" = COALESCE($8, "time"),
+             min_price = COALESCE($9, min_price),
+             max_price = COALESCE($10, max_price),
+             image = COALESCE($11, image),
+             banner = COALESCE($12, banner),
+             organizer = COALESCE($13, organizer),
+             highlights = COALESCE($14, highlights),
+             rules = COALESCE($15, rules),
+             thumbnails = COALESCE($16, thumbnails)
+         WHERE id = $17
+         RETURNING *
+       )
+       SELECT updated.*,
+              categories.name AS category_name,
+              cities.name AS city_name
+       FROM updated
+       LEFT JOIN categories ON categories.id = updated.category
+       LEFT JOIN cities ON cities.id = updated.city;`,
       [
         title !== undefined ? title : null,
         description !== undefined ? description : null,
         location !== undefined ? location : null,
         start_time ? new Date(start_time) : null,
         event_type !== undefined ? event_type : null,
-        category !== undefined ? category : null,
+        resolvedCategory,
+        resolvedCity,
         time !== undefined ? time : null,
         min_price !== undefined && min_price !== '' ? Number(min_price) : null,
         max_price !== undefined && max_price !== '' ? Number(max_price) : null,
