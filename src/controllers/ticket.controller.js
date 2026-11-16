@@ -33,9 +33,9 @@ exports.getEvents = async (req, res) => {
   try {
     const events = await ticketService.getAllEvents();
     const responseDto = new EventListResponseDTO(events);
-    res.json(responseDto.toJSON());
+    res.status(200).json(responseDto.toJSON());
   } catch (err) {
-    const errorDto = new EventErrorDTO(err.message);
+    const errorDto = new EventErrorDTO(err.message, 500);
     res.status(500).json(errorDto.toJSON());
   }
 };

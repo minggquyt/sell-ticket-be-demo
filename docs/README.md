@@ -63,6 +63,24 @@ docs/
 
 ## 🎯 API Overview
 
+### Response envelope
+
+JSON responses from `/api/*` use the same top-level structure:
+
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
+  "data": {}
+}
+```
+
+`statusCode` matches the HTTP status. Endpoint-specific payloads are placed in
+`data` (an empty collection is `[]`; responses without a payload use `null`).
+Additional response fields are nested under `data`. HTML pages and the SSE log
+stream are not JSON API responses.
+
 ### Public Endpoints (Không cần authentication)
 
 ```
