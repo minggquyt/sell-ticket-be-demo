@@ -9,6 +9,25 @@ class AuthRepository {
     return result.rows[0] || null;
   }
 
+  async findUserById(userId) {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE id = $1;',
+      [userId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async updateUserPhone(userId, phone) {
+    const result = await pool.query(
+      `UPDATE users
+       SET phone = $2
+       WHERE id = $1
+       RETURNING id, email, full_name, role, phone;`,
+      [userId, phone]
+    );
+    return result.rows[0] || null;
+  }
+
   async checkEmailExists(email) {
     const result = await pool.query(
       'SELECT id FROM users WHERE email = $1;',
@@ -17,12 +36,12 @@ class AuthRepository {
     return result.rows.length > 0;
   }
 
-  async createUser(email, hashedPassword, fullName) {
+  async createUser(email, hashedPassword, fullName, phone) {
     const result = await pool.query(
-      `INSERT INTO users (email, password, full_name, role)
-       VALUES ($1, $2, $3, 'CUSTOMER')
-       RETURNING id, email, full_name, role;`,
-      [email, hashedPassword, fullName]
+      `INSERT INTO users (email, password, full_name, role, phone)
+       VALUES ($1, $2, $3, 'CUSTOMER', $4)
+       RETURNING id, email, full_name, role, phone;`,
+      [email, hashedPassword, fullName, phone]
     );
     return result.rows[0];
   }

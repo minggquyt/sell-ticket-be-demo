@@ -5,6 +5,7 @@ class RegisterRequestDTO {
     this.email = body.email;
     this.password = body.password;
     this.fullName = body.fullName;
+    this.phone = body.phone
   }
 
   validate() {
@@ -32,6 +33,15 @@ class RegisterRequestDTO {
       this.fullName = this.email.split('@')[0];
     }
 
+    if (!this.phone || typeof this.phone !== 'string' || this.phone.trim() === '') {
+      errors.push('Phone number is required.');
+    } else {
+      const phoneRegex = /^[0-9]{10,11}$/;
+      if (!phoneRegex.test(this.phone.trim())) {
+        errors.push('Invalid phone number format.');
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -42,7 +52,8 @@ class RegisterRequestDTO {
     return {
       email: this.email,
       password: this.password,
-      fullName: this.fullName
+      fullName: this.fullName,
+      phone: this.phone.trim() 
     };
   }
 }
@@ -74,6 +85,37 @@ class LoginRequestDTO {
     return {
       email: this.email,
       password: this.password
+    };
+  }
+}
+
+class UpdateProfileRequestDTO {
+  constructor(body = {}) {
+    this.phone = String(body.phone ?? '').trim();
+  }
+
+  validate() {
+    const errors = [];
+    const normalizedPhone = this.phone.replace(/\s+/g, '');
+
+    if (!normalizedPhone) {
+      errors.push('Số điện thoại không được để trống.');
+    } else {
+      const phoneRegex = /^(0|\+84)\d{9,10}$/;
+      if (!phoneRegex.test(normalizedPhone)) {
+        errors.push('Số điện thoại không đúng định dạng.');
+      }
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors,
+    };
+  }
+
+  toServiceInput() {
+    return {
+      phone: this.phone.replace(/\s+/g, ''),
     };
   }
 }
@@ -162,6 +204,7 @@ class UserResponseDTO {
     this.email = user.email;
     this.fullName = user.full_name || user.fullName;
     this.role = user.role;
+    this.phone = user.phone || user.phone_number || user.phoneNumber || null;
   }
 
   toJSON() {
@@ -169,7 +212,8 @@ class UserResponseDTO {
       id: this.id,
       email: this.email,
       fullName: this.fullName,
-      role: this.role
+      role: this.role,
+      phone: this.phone
     };
   }
 }
@@ -227,6 +271,7 @@ module.exports = {
   // Request DTOs
   RegisterRequestDTO,
   LoginRequestDTO,
+  UpdateProfileRequestDTO,
   UpdateBankRequestDTO,
   toBankAccountName,
   // Response DTOs

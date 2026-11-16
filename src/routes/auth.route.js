@@ -7,6 +7,10 @@ const { verifyToken } = require('../middlewares/auth.middleware');
 router.post('/register', authController.register);
 router.post('/login', authController.login);
 
+// Hồ sơ người dùng đang đăng nhập
+router.get('/me', verifyToken, authController.getMyProfile);
+router.put('/me', verifyToken, authController.updateMyProfile);
+
 // Hồ sơ ngân hàng nhận hoàn tiền của user đang đăng nhập
 router.get('/me/bank', verifyToken, authController.getMyBank);
 router.put('/me/bank', verifyToken, authController.updateMyBank);

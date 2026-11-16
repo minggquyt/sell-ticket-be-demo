@@ -3,8 +3,10 @@ const logger = require('../utils/logger');
 const {
   RegisterRequestDTO,
   LoginRequestDTO,
+  UpdateProfileRequestDTO,
   UpdateBankRequestDTO,
   BankProfileDTO,
+  UserResponseDTO,
   RegisterResponseDTO,
   LoginResponseDTO,
   ErrorResponseDTO
@@ -22,8 +24,8 @@ exports.register = async (req, res) => {
     }
     
     // Call service
-    const { email, password, fullName } = requestDto.toServiceInput();
-    const user = await authService.register(email, password, fullName);
+    const { email, password, fullName, phone } = requestDto.toServiceInput(); 
+    const user = await authService.register(email, password, fullName, phone); 
     
     // Response DTO: Format output
     const responseDto = new RegisterResponseDTO(user);
@@ -57,6 +59,36 @@ exports.login = async (req, res) => {
     logger.error('AUTH_LOGIN', err.message, err);
     const errorDto = new ErrorResponseDTO(err.message);
     return res.status(400).json(errorDto.toJSON());
+  }
+};
+
+exports.getMyProfile = async (req, res) => {
+  try {
+    const user = await authService.getProfile(req.user.id);
+    return res.json({ success: true, data: new UserResponseDTO(user).toJSON() });
+  } catch (err) {
+    logger.error('AUTH_GET_PROFILE', err.message, err);
+    return res.status(400).json(new ErrorResponseDTO(err.message).toJSON());
+  }
+};
+
+exports.updateMyProfile = async (req, res) => {
+  try {
+    const requestDto = new UpdateProfileRequestDTO(req.body);
+    const validation = requestDto.validate();
+    if (!validation.isValid) {
+      return res.status(400).json(new ErrorResponseDTO(validation.errors.join(' ')).toJSON());
+    }
+
+    const updatedUser = await authService.updateProfile(req.user.id, requestDto.toServiceInput());
+    return res.json({
+      success: true,
+      message: 'Đã cập nhật số điện thoại.',
+      data: new UserResponseDTO(updatedUser).toJSON(),
+    });
+  } catch (err) {
+    logger.error('AUTH_UPDATE_PROFILE', err.message, err);
+    return res.status(400).json(new ErrorResponseDTO(err.message).toJSON());
   }
 };
 

@@ -219,14 +219,12 @@ exports.startCheckout = async (req, res) => {
     const serviceInput = requestDto.toServiceInput();
     logger.payment('START_CHECKOUT_SERVICE_INPUT', `Parsed values: ${JSON.stringify({
       seatIds: serviceInput.seatIds,
-      phone: serviceInput.phone,
-      citizenId: serviceInput.citizenId,
       returnUrl: serviceInput.returnUrl,
       cancelUrl: serviceInput.cancelUrl
     })}`);
 
-    const { seatIds, returnUrl, cancelUrl, phone, citizenId } = serviceInput;
-    const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl, phone, citizenId);
+    const { seatIds, returnUrl, cancelUrl } = serviceInput;
+    const result = await ticketService.startCheckoutSeats(req.user.id, seatIds, returnUrl, cancelUrl);
     
     const responseDto = new CheckoutResponseDTO(result);
     res.json(responseDto.toJSON());

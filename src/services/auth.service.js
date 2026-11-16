@@ -5,7 +5,7 @@ const { JWT_SECRET, JWT_EXPIRES_IN, BCRYPT_SALT_ROUNDS } = require('../config/co
 const logger = require('../utils/logger');
 
 class AuthService {
-  async register(email, password, fullName) {
+  async register(email, password, fullName, phone) {
     // Kiểm tra email đã tồn tại
     const emailExists = await authRepository.checkEmailExists(email);
     if (emailExists) {
@@ -18,7 +18,7 @@ class AuthService {
 
     // Tạo user mới
     const defaultFullName = fullName || email.split('@')[0];
-    const user = await authRepository.createUser(email, hashedPassword, defaultFullName);
+    const user = await authRepository.createUser(email, hashedPassword, defaultFullName, phone);
 
     logger.auth('REGISTER', email, true, `Tạo tài khoản thành công (ID: ${user.id})`);
     
@@ -63,8 +63,29 @@ class AuthService {
         email: user.email,
         role: user.role,
         fullName: user.full_name,
+        phone: user.phone,
       },
     };
+  }
+
+  async getProfile(userId) {
+    const user = await authRepository.findUserById(userId);
+    if (!user) {
+      throw new Error('Không tìm thấy tài khoản.');
+    }
+    return user;
+  }
+
+  async updateProfile(userId, input) {
+    const phone = String(input.phone ?? '').replace(/\s+/g, '');
+    if (!phone) {
+      throw new Error('Số điện thoại không được để trống.');
+    }
+    const user = await authRepository.updateUserPhone(userId, phone);
+    if (!user) {
+      throw new Error('Không tìm thấy tài khoản để cập nhật.');
+    }
+    return user;
   }
 
   async getBankProfile(userId) {
