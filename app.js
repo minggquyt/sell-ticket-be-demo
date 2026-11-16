@@ -5,9 +5,15 @@ const indexRoutes = require("./src/routes/index.route");
 const logger = require("./src/utils/logger");
 const { startSeatReleaseJob } = require("./src/jobs/seat-release.job");
 const { SSE_HEARTBEAT_INTERVAL_MS } = require("./src/config/constants");
+const {
+  apiResponseMiddleware,
+  apiNotFoundMiddleware,
+  apiErrorMiddleware,
+} = require("./src/middlewares/api-response.middleware");
 
 const app = express();
 app.use(cors());
+app.use("/api", apiResponseMiddleware);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -74,6 +80,9 @@ app.get("/api/logs/stream", (req, res) => {
 app.get("/logs", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "logs.html"));
 });
+
+app.use("/api", apiNotFoundMiddleware);
+app.use(apiErrorMiddleware);
 
 // Khởi động background job quét ghế hết hạn
 startSeatReleaseJob();

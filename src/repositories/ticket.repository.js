@@ -30,7 +30,13 @@ class TicketRepository {
   // ==================== Events ====================
   async getAllEvents() {
     const result = await pool.query(
-      'SELECT * FROM events ORDER BY created_at DESC;'
+      `SELECT events.*,
+              categories.name AS category_name,
+              cities.name AS city_name
+       FROM events
+       LEFT JOIN categories ON categories.id = events.category
+       LEFT JOIN cities ON cities.id = events.city
+       ORDER BY events.created_at DESC;`
     );
     return result.rows;
   }

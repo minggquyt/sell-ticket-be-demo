@@ -22,6 +22,8 @@ Không có
 ```json
 {
   "success": true,
+  "statusCode": 200,
+  "message": "Lấy danh sách sự kiện thành công.",
   "data": [
     {
       "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -30,7 +32,9 @@ Không có
       "location": "SVĐ Mỹ Đình, Hà Nội",
       "start_time": "2024-12-31T19:00:00.000Z",
       "event_type": "SEAT_BASED",
-      "created_at": "2024-01-01T00:00:00.000Z"
+      "created_at": "2024-01-01T00:00:00.000Z",
+      "category": "Âm nhạc",
+      "city": "Hà Nội"
     },
     {
       "id": "660e8400-e29b-41d4-a716-446655440001",
@@ -39,7 +43,9 @@ Không có
       "location": "Công viên Thống Nhất",
       "start_time": "2024-12-25T18:00:00.000Z",
       "event_type": "ZONE_BASED",
-      "created_at": "2024-01-02T00:00:00.000Z"
+      "created_at": "2024-01-02T00:00:00.000Z",
+      "category": null,
+      "city": null
     }
   ]
 }
@@ -50,6 +56,8 @@ Không có
 | Field | Type | Description |
 |-------|------|-------------|
 | success | boolean | Trạng thái thành công |
+| statusCode | number | HTTP status code |
+| message | string | Thông báo kết quả |
 | data | array | Danh sách sự kiện |
 | data[].id | uuid | ID sự kiện |
 | data[].title | string | Tên sự kiện |
@@ -58,6 +66,8 @@ Không có
 | data[].start_time | datetime | Thời gian bắt đầu (ISO 8601) |
 | data[].event_type | enum | SEAT_BASED hoặc ZONE_BASED |
 | data[].created_at | datetime | Thời gian tạo |
+| data[].category | string \| null | Tên danh mục sự kiện |
+| data[].city | string \| null | Tên thành phố |
 
 #### Event Types
 
@@ -71,6 +81,8 @@ Không có
 ```json
 {
   "success": false,
+  "statusCode": 500,
+  "data": null,
   "message": "Database connection error"
 }
 ```
