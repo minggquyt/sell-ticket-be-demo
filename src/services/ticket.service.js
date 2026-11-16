@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const {
   SEAT_HOLD_DURATION_SECONDS,
   PAYMENT_TIMEOUT_SECONDS,
+  MAX_TICKETS_PER_USER
 } = require('../config/constants');
 
 class TicketService {
@@ -246,14 +247,12 @@ class TicketService {
   }
 
   // ==================== Checkout ====================
-  async startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl, phone, citizenId) {
+  async startCheckoutSeats(userId, seatIds, returnUrl, cancelUrl) {
     const client = await ticketRepository.beginTransaction();
     try {
       logger.payment('START_CHECKOUT_SERVICE', `Inputs: ${JSON.stringify({
         userId,
         seatCount: Array.isArray(seatIds) ? seatIds.length : 0,
-        phone,
-        citizenId,
         returnUrl,
         cancelUrl
       })}`);
@@ -303,7 +302,7 @@ class TicketService {
       const paymentTimeout = new Date(expiredAt * 1000);
       const seatReservedUntil = paymentTimeout;
 
-      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, phone, citizenId, client);
+      const order = await ticketRepository.createOrder(userId, total, paymentTimeout, client);
       const orderCode = Number(order.order_code);
 
       for (const s of seatRows) {

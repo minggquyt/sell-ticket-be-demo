@@ -5,6 +5,7 @@ class RegisterRequestDTO {
     this.email = body.email;
     this.password = body.password;
     this.fullName = body.fullName;
+    this.phone = body.phone
   }
 
   validate() {
@@ -32,6 +33,15 @@ class RegisterRequestDTO {
       this.fullName = this.email.split('@')[0];
     }
 
+    if (!this.phone || typeof this.phone !== 'string' || this.phone.trim() === '') {
+      errors.push('Phone number is required.');
+    } else {
+      const phoneRegex = /^[0-9]{10,11}$/;
+      if (!phoneRegex.test(this.phone.trim())) {
+        errors.push('Invalid phone number format.');
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -42,7 +52,8 @@ class RegisterRequestDTO {
     return {
       email: this.email,
       password: this.password,
-      fullName: this.fullName
+      fullName: this.fullName,
+      phone: this.phone.trim() 
     };
   }
 }

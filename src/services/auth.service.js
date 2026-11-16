@@ -5,7 +5,7 @@ const { JWT_SECRET, JWT_EXPIRES_IN, BCRYPT_SALT_ROUNDS } = require('../config/co
 const logger = require('../utils/logger');
 
 class AuthService {
-  async register(email, password, fullName) {
+  async register(email, password, fullName, phone) {
     // Kiểm tra email đã tồn tại
     const emailExists = await authRepository.checkEmailExists(email);
     if (emailExists) {
@@ -18,7 +18,7 @@ class AuthService {
 
     // Tạo user mới
     const defaultFullName = fullName || email.split('@')[0];
-    const user = await authRepository.createUser(email, hashedPassword, defaultFullName);
+    const user = await authRepository.createUser(email, hashedPassword, defaultFullName, phone);
 
     logger.auth('REGISTER', email, true, `Tạo tài khoản thành công (ID: ${user.id})`);
     

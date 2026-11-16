@@ -20,8 +20,8 @@ exports.register = async (req, res) => {
     }
     
     // Call service
-    const { email, password, fullName } = requestDto.toServiceInput();
-    const user = await authService.register(email, password, fullName);
+    const { email, password, fullName, phone } = requestDto.toServiceInput(); 
+    const user = await authService.register(email, password, fullName, phone); 
     
     // Response DTO: Format output
     const responseDto = new RegisterResponseDTO(user);
