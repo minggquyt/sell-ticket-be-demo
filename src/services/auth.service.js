@@ -66,6 +66,30 @@ class AuthService {
       },
     };
   }
+
+  async getBankProfile(userId) {
+    const profile = await authRepository.getBankProfile(userId);
+    if (!profile) throw new Error('Không tìm thấy tài khoản.');
+    return profile;
+  }
+
+  async updateBank(userId, input) {
+    const current = await this.getBankProfile(userId);
+    const unchanged =
+      current.bank_bin === input.bankBin &&
+      current.bank_account_no === input.bankAccountNo &&
+      current.bank_account_name === input.bankAccountName;
+
+    if (current.bank_error && unchanged) {
+      throw new Error(
+        'Thông tin ngân hàng đang bị Admin báo sai. Vui lòng chỉnh sửa Ngân hàng, Số tài khoản hoặc Tên chủ tài khoản trước khi lưu.'
+      );
+    }
+
+    await authRepository.updateBankAndClearErrors(userId, input);
+    logger.auth('UPDATE_BANK', current.email, true, `${input.bankShortName} - ${input.bankAccountNo}`);
+    return this.getBankProfile(userId);
+  }
 }
 
 module.exports = new AuthService();

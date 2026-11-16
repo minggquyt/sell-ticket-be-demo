@@ -3,6 +3,8 @@ const logger = require('../utils/logger');
 const {
   RegisterRequestDTO,
   LoginRequestDTO,
+  UpdateBankRequestDTO,
+  BankProfileDTO,
   RegisterResponseDTO,
   LoginResponseDTO,
   ErrorResponseDTO
@@ -55,5 +57,34 @@ exports.login = async (req, res) => {
     logger.error('AUTH_LOGIN', err.message, err);
     const errorDto = new ErrorResponseDTO(err.message);
     return res.status(400).json(errorDto.toJSON());
+  }
+};
+
+exports.getMyBank = async (req, res) => {
+  try {
+    const profile = await authService.getBankProfile(req.user.id);
+    return res.json({ success: true, data: new BankProfileDTO(profile).toJSON() });
+  } catch (err) {
+    logger.error('AUTH_GET_BANK', err.message, err);
+    return res.status(400).json(new ErrorResponseDTO(err.message).toJSON());
+  }
+};
+
+exports.updateMyBank = async (req, res) => {
+  try {
+    const requestDto = new UpdateBankRequestDTO(req.body);
+    const validation = requestDto.validate();
+    if (!validation.isValid) {
+      return res.status(400).json(new ErrorResponseDTO(validation.errors.join(' ')).toJSON());
+    }
+    const profile = await authService.updateBank(req.user.id, requestDto.toServiceInput());
+    return res.json({
+      success: true,
+      message: 'Đã lưu thông tin ngân hàng.',
+      data: new BankProfileDTO(profile).toJSON(),
+    });
+  } catch (err) {
+    logger.error('AUTH_UPDATE_BANK', err.message, err);
+    return res.status(400).json(new ErrorResponseDTO(err.message).toJSON());
   }
 };

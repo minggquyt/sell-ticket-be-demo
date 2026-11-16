@@ -78,7 +78,83 @@ class LoginRequestDTO {
   }
 }
 
+// Chuẩn hoá tên chủ TK: CHỮ IN HOA KHÔNG DẤU, chỉ A-Z và khoảng trắng (giống tên trên App Ngân hàng)
+const toBankAccountName = (value) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[đĐ]/g, 'D')
+    .toUpperCase()
+    .replace(/[^A-Z ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+class UpdateBankRequestDTO {
+  constructor(body = {}) {
+    this.bankBin = String(body.bankBin ?? '').trim();
+    this.bankShortName = String(body.bankShortName ?? '').trim();
+    this.bankName = String(body.bankName ?? '').trim();
+    this.bankLogo = String(body.bankLogo ?? '').trim();
+    this.bankAccountNo = String(body.bankAccountNo ?? '').replace(/\s+/g, '');
+    this.bankAccountName = toBankAccountName(body.bankAccountName);
+  }
+
+  validate() {
+    const errors = [];
+    // ponytail: không gọi lại VietQR để xác minh BIN ở server; nâng cấp = cache danh sách /v2/banks rồi đối chiếu.
+    if (!/^\d{6}$/.test(this.bankBin) || !this.bankShortName) {
+      errors.push('Vui lòng chọn ngân hàng từ danh sách.');
+    }
+    if (this.bankShortName.length > 100 || this.bankName.length > 255) {
+      errors.push('Tên ngân hàng quá dài.');
+    }
+    if (this.bankLogo && (!/^https:\/\//.test(this.bankLogo) || this.bankLogo.length > 500)) {
+      errors.push('Logo ngân hàng không hợp lệ.');
+    }
+    if (!/^[A-Za-z0-9]{6,25}$/.test(this.bankAccountNo)) {
+      errors.push('Số tài khoản chỉ gồm chữ và số, dài 6–25 ký tự.');
+    }
+    if (this.bankAccountName.length < 2 || this.bankAccountName.length > 100) {
+      errors.push('Tên chủ tài khoản phải dài 2–100 ký tự (in hoa không dấu).');
+    }
+    return { isValid: errors.length === 0, errors };
+  }
+
+  toServiceInput() {
+    return {
+      bankBin: this.bankBin,
+      bankShortName: this.bankShortName,
+      bankName: this.bankName,
+      bankLogo: this.bankLogo || null,
+      bankAccountNo: this.bankAccountNo,
+      bankAccountName: this.bankAccountName,
+    };
+  }
+}
+
 // ============ RESPONSE DTOs ============
+
+class BankProfileDTO {
+  constructor(row) {
+    this.fullName = row.full_name;
+    this.email = row.email;
+    this.bank = row.bank_account_no
+      ? {
+          bankBin: row.bank_bin,
+          bankShortName: row.bank_short_name,
+          bankName: row.bank_name,
+          bankLogo: row.bank_logo,
+          bankAccountNo: row.bank_account_no,
+          bankAccountName: row.bank_account_name,
+        }
+      : null;
+    this.bankError = row.bank_error || null;
+  }
+
+  toJSON() {
+    return { fullName: this.fullName, email: this.email, bank: this.bank, bankError: this.bankError };
+  }
+}
 
 class UserResponseDTO {
   constructor(user) {
@@ -150,7 +226,10 @@ module.exports = {
   // Request DTOs
   RegisterRequestDTO,
   LoginRequestDTO,
+  UpdateBankRequestDTO,
+  toBankAccountName,
   // Response DTOs
+  BankProfileDTO,
   RegisterResponseDTO,
   LoginResponseDTO,
   UserResponseDTO,
