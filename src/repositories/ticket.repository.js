@@ -30,7 +30,13 @@ class TicketRepository {
   // ==================== Events ====================
   async getAllEvents() {
     const result = await pool.query(
-      'SELECT * FROM events ORDER BY created_at DESC;'
+      `SELECT events.*,
+              categories.name AS category_name,
+              cities.name AS city_name
+       FROM events
+       LEFT JOIN categories ON categories.id = events.category
+       LEFT JOIN cities ON cities.id = events.city
+       ORDER BY events.created_at DESC;`
     );
     return result.rows;
   }
@@ -45,6 +51,19 @@ class TicketRepository {
     return result.rows[0];
   }
 
+  // Chuyển tên (VD: "Âm nhạc") hoặc UUID sang UUID của categories/cities; tránh lỗi cast UUID khi FE gửi tên
+  async resolveRefId(table, value, dbClient = pool) {
+    if (!value) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    const allowed = table === 'categories' ? 'categories' : 'cities';
+    const res = await dbClient.query(
+      `SELECT id FROM ${allowed} WHERE id::text = $1 OR LOWER(name) = LOWER($1) LIMIT 1;`,
+      [str]
+    );
+    return res.rows[0]?.id || null;
+  }
+
   async updateEvent(eventId, eventData, dbClient = pool) {
     const {
       title,
@@ -53,6 +72,7 @@ class TicketRepository {
       start_time,
       event_type,
       category,
+      city,
       time,
       min_price,
       max_price,
@@ -64,32 +84,45 @@ class TicketRepository {
       thumbnails,
     } = eventData;
 
+    const resolvedCategory = await this.resolveRefId('categories', category, dbClient);
+    const resolvedCity = await this.resolveRefId('cities', city, dbClient);
+
     const result = await dbClient.query(
-      `UPDATE events
-       SET title = COALESCE($1, title),
-           description = COALESCE($2, description),
-           location = COALESCE($3, location),
-           start_time = COALESCE($4, start_time),
-           event_type = COALESCE($5, event_type),
-           category = COALESCE($6, category),
-           "time" = COALESCE($7, "time"),
-           min_price = COALESCE($8, min_price),
-           max_price = COALESCE($9, max_price),
-           image = COALESCE($10, image),
-           banner = COALESCE($11, banner),
-           organizer = COALESCE($12, organizer),
-           highlights = COALESCE($13, highlights),
-           rules = COALESCE($14, rules),
-           thumbnails = COALESCE($15, thumbnails)
-       WHERE id = $16
-       RETURNING *;`,
+      `WITH updated AS (
+         UPDATE events
+         SET title = COALESCE($1, title),
+             description = COALESCE($2, description),
+             location = COALESCE($3, location),
+             start_time = COALESCE($4, start_time),
+             event_type = COALESCE($5, event_type),
+             category = COALESCE($6, category),
+             city = COALESCE($7, city),
+             "time" = COALESCE($8, "time"),
+             min_price = COALESCE($9, min_price),
+             max_price = COALESCE($10, max_price),
+             image = COALESCE($11, image),
+             banner = COALESCE($12, banner),
+             organizer = COALESCE($13, organizer),
+             highlights = COALESCE($14, highlights),
+             rules = COALESCE($15, rules),
+             thumbnails = COALESCE($16, thumbnails)
+         WHERE id = $17
+         RETURNING *
+       )
+       SELECT updated.*,
+              categories.name AS category_name,
+              cities.name AS city_name
+       FROM updated
+       LEFT JOIN categories ON categories.id = updated.category
+       LEFT JOIN cities ON cities.id = updated.city;`,
       [
         title !== undefined ? title : null,
         description !== undefined ? description : null,
         location !== undefined ? location : null,
         start_time ? new Date(start_time) : null,
         event_type !== undefined ? event_type : null,
-        category !== undefined ? category : null,
+        resolvedCategory,
+        resolvedCity,
         time !== undefined ? time : null,
         min_price !== undefined && min_price !== '' ? Number(min_price) : null,
         max_price !== undefined && max_price !== '' ? Number(max_price) : null,
@@ -415,6 +448,10 @@ class TicketRepository {
         o.status AS order_status,
         o.status,
         o.created_at,
+        o.refund_bank_error,
+        o.refund_snapshot,
+        u.bank_short_name,
+        u.bank_account_no,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
@@ -429,11 +466,12 @@ class TicketRepository {
           ) FILTER (WHERE s.id IS NOT NULL), '[]'
         ) AS items
       FROM orders o
+      JOIN users u ON o.user_id = u.id
       LEFT JOIN order_items oi ON o.order_code = oi.order_code
       LEFT JOIN seats s ON oi.seat_id = s.id
       LEFT JOIN events e ON s.event_id = e.id
       WHERE o.user_id = $1
-      GROUP BY o.order_code, e.id
+      GROUP BY o.order_code, u.id, e.id
       ORDER BY o.created_at DESC;`,
       [userId]
     );
@@ -450,6 +488,14 @@ class TicketRepository {
         o.total_amount,
         o.status AS order_status,
         o.created_at,
+        o.refund_bank_error,
+        o.refund_snapshot,
+        u.bank_bin,
+        u.bank_short_name,
+        u.bank_name,
+        u.bank_logo,
+        u.bank_account_no,
+        u.bank_account_name,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
@@ -509,13 +555,42 @@ class TicketRepository {
     return result.rows;
   }
 
-  async confirmOrderRefund(orderCode) {
+  // Đóng băng TT ngân hàng tại thời điểm hoàn vào refund_snapshot (bằng chứng đối soát).
+  // Chỉ thành công khi TK hiện tại của khách TRÙNG với TK Admin vừa quét QR ($2..$4)
+  // -> chặn trường hợp khách đổi TK giữa lúc Admin đang mở modal.
+  async confirmOrderRefund(orderCode, { bankBin, bankAccountNo, bankAccountName, note, refundedBy }) {
     const result = await pool.query(
-      `UPDATE orders
-       SET status = 'REFUNDED'
+      `UPDATE orders o
+       SET status = 'REFUNDED',
+           refund_snapshot = jsonb_build_object(
+             'bankBin', u.bank_bin,
+             'bankShortName', u.bank_short_name,
+             'bankName', u.bank_name,
+             'bankAccountNo', u.bank_account_no,
+             'bankAccountName', u.bank_account_name,
+             'amount', o.total_amount,
+             'note', $5::text,
+             'refundedBy', $6::text,
+             'refundedAt', now()
+           )
+       FROM users u
+       WHERE o.user_id = u.id
+         AND o.order_code = $1
+         AND o.status = 'REFUND_PENDING'
+         AND o.refund_bank_error IS NULL
+         AND u.bank_bin = $2 AND u.bank_account_no = $3 AND u.bank_account_name = $4
+       RETURNING o.order_code, o.status, o.refund_snapshot;`,
+      [orderCode, bankBin, bankAccountNo, bankAccountName, note, refundedBy]
+    );
+    return result.rows[0] || null;
+  }
+
+  async markRefundBankError(orderCode, reason) {
+    const result = await pool.query(
+      `UPDATE orders SET refund_bank_error = $2
        WHERE order_code = $1 AND status = 'REFUND_PENDING'
-       RETURNING *;`,
-      [orderCode]
+       RETURNING order_code, refund_bank_error;`,
+      [orderCode, reason]
     );
     return result.rows[0] || null;
   }

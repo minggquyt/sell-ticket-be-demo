@@ -169,13 +169,16 @@ Content-Type: application/json
 ```json
 {
   "success": true,
+  "statusCode": 200,
   "message": "Đăng nhập thành công!",
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMCIsImVtYWlsIjoidXNlckBleGFtcGxlLmNvbSIsInJvbGUiOiJDVVNUT01FUiIsImZ1bGxOYW1lIjoiTmd1eWVuIFZhbiBBIiwiaWF0IjoxNzAzMDAwMDAwLCJleHAiOjE3MDMwODY0MDB9.signature_here",
-  "user": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "email": "user@example.com",
-    "role": "CUSTOMER",
-    "fullName": "Nguyen Van A"
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMCIsImVtYWlsIjoidXNlckBleGFtcGxlLmNvbSIsInJvbGUiOiJDVVNUT01FUiIsImZ1bGxOYW1lIjoiTmd1eWVuIFZhbiBBIiwiaWF0IjoxNzAzMDAwMDAwLCJleHAiOjE3MDMwODY0MDB9.signature_here",
+    "user": {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "email": "user@example.com",
+      "role": "CUSTOMER",
+      "fullName": "Nguyen Van A"
+    }
   }
 }
 ```
@@ -185,12 +188,13 @@ Content-Type: application/json
 | Field | Type | Description |
 |-------|------|-------------|
 | success | boolean | Trạng thái thành công |
+| statusCode | number | HTTP status code |
 | message | string | Thông báo |
-| token | string | JWT token (expires in 1 day) |
-| user.id | uuid | ID người dùng |
-| user.email | string | Email |
-| user.role | enum | CUSTOMER hoặc ADMIN |
-| user.fullName | string | Tên đầy đủ |
+| data.token | string | JWT token (expires in 1 day) |
+| data.user.id | uuid | ID người dùng |
+| data.user.email | string | Email |
+| data.user.role | enum | CUSTOMER hoặc ADMIN |
+| data.user.fullName | string | Tên đầy đủ |
 
 #### JWT Token Structure
 

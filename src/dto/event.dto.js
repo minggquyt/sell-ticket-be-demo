@@ -10,7 +10,8 @@ class EventResponseDTO {
     this.event_type = event.event_type;
     this.created_at = event.created_at;
     this.thumbnails = event.thumbnails;
-    this.category = event.category;
+    this.category = event.category_name;
+    this.city = event.city_name;
     this.time = event.time;
     this.min_price = event.min_price;
     this.max_price = event.max_price;
@@ -32,6 +33,7 @@ class EventResponseDTO {
       created_at: this.created_at,
       thumbnails: this.thumbnails,
       category: this.category,
+      city: this.city,
       time: this.time,
       min_price: this.min_price,
       max_price: this.max_price,
@@ -45,14 +47,18 @@ class EventResponseDTO {
 }
 
 class EventListResponseDTO {
-  constructor(events) {
+  constructor(events, statusCode = 200, message = 'Lấy danh sách sự kiện thành công.') {
     this.success = true;
+    this.statusCode = statusCode;
+    this.message = message;
     this.data = events.map(event => new EventResponseDTO(event).toJSON());
   }
 
   toJSON() {
     return {
       success: this.success,
+      statusCode: this.statusCode,
+      message: this.message,
       data: this.data
     };
   }
@@ -133,15 +139,19 @@ class EventZonesResponseDTO {
 }
 
 class ErrorResponseDTO {
-  constructor(message) {
+  constructor(message, statusCode = 500) {
     this.success = false;
+    this.statusCode = statusCode;
     this.message = message;
+    this.data = null;
   }
 
   toJSON() {
     return {
       success: this.success,
-      message: this.message
+      statusCode: this.statusCode,
+      message: this.message,
+      data: this.data
     };
   }
 }

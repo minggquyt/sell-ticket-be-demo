@@ -88,10 +88,26 @@ class OrderHistoryItemDTO {
     this.customerName = order.customer_name || null;
     this.customerEmail = order.customer_email || null;
     this.items = (order.items || []).map(item => new OrderItemDTO(item).toJSON());
+    // Hoàn tiền thủ công VietQR: TT ngân hàng hiện tại của khách, cờ "Sai TK", snapshot đã hoàn
+    this.refundBank = order.bank_account_no
+      ? {
+          bankBin: order.bank_bin || null,
+          bankShortName: order.bank_short_name || null,
+          bankName: order.bank_name || null,
+          bankLogo: order.bank_logo || null,
+          bankAccountNo: order.bank_account_no,
+          bankAccountName: order.bank_account_name || null,
+        }
+      : null;
+    this.refundBankError = order.refund_bank_error || null;
+    this.refundSnapshot = order.refund_snapshot || null;
   }
 
   toJSON() {
     return {
+      refundBank: this.refundBank,
+      refundBankError: this.refundBankError,
+      refundSnapshot: this.refundSnapshot,
       orderCode: this.orderCode,
       totalAmount: this.totalAmount,
       status: this.status,

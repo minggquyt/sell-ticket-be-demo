@@ -259,14 +259,6 @@ class TicketService {
 
       const uniqueSeatIds = [...new Set(seatIds)];
       
-      // FIX #5: Kiểm tra tổng số vé SUCCESS của user trong database
-      const successfulTicketsCount = await ticketRepository.countSuccessfulTicketsByUser(userId, client);
-      const requestedCount = uniqueSeatIds.length;
-      
-      if (successfulTicketsCount + requestedCount > MAX_TICKETS_PER_USER) {
-        throw new Error(`Bạn đã mua ${successfulTicketsCount} vé. Chỉ được mua tối đa ${MAX_TICKETS_PER_USER} vé (còn lại ${MAX_TICKETS_PER_USER - successfulTicketsCount} vé).`);
-      }
-      
       // FIX #1: Race condition - Lock ghế và verify ownership trong cùng transaction
       const seatRows = await ticketRepository.getSeatsByIdsForUpdate(uniqueSeatIds, client);
 
@@ -547,16 +539,34 @@ class TicketService {
     return await ticketRepository.getAllAdminTickets();
   }
 
-  async confirmOrderRefund(orderCode) {
+  async confirmOrderRefund(orderCode, input) {
     const numericOrderCode = Number(orderCode);
     if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
       throw new Error('Mã đơn hàng không hợp lệ.');
     }
-    const updated = await ticketRepository.confirmOrderRefund(numericOrderCode);
+    const updated = await ticketRepository.confirmOrderRefund(numericOrderCode, input);
+    if (!updated) {
+      throw new Error(
+        'Không thể xác nhận: đơn không còn Chờ hoàn tiền, đang bị báo Sai TK, hoặc khách vừa đổi thông tin ngân hàng. Vui lòng tải lại danh sách và quét lại QR.'
+      );
+    }
+    logger.payment(
+      'REFUNDED',
+      `Admin ${input.refundedBy} xác nhận hoàn tiền đơn #${numericOrderCode} -> ${input.bankAccountNo} (${input.bankAccountName})${input.note ? ` | ${input.note}` : ''}`
+    );
+    return updated;
+  }
+
+  async markRefundBankError(orderCode, reason) {
+    const numericOrderCode = Number(orderCode);
+    if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
+      throw new Error('Mã đơn hàng không hợp lệ.');
+    }
+    const updated = await ticketRepository.markRefundBankError(numericOrderCode, reason);
     if (!updated) {
       throw new Error('Không tìm thấy đơn hàng ở trạng thái Chờ hoàn tiền (REFUND_PENDING).');
     }
-    logger.payment('REFUNDED', `Admin đã xác nhận hoàn tiền thành công cho đơn #${numericOrderCode}`);
+    logger.payment('REFUND_BANK_ERROR', `Admin báo sai TT ngân hàng cho đơn #${numericOrderCode}: ${reason}`);
     return updated;
   }
 
@@ -570,6 +580,7 @@ class TicketService {
       seatConfig,
       zoneConfigs,
       category,
+      city,
       time,
       min_price,
       max_price,
@@ -592,10 +603,11 @@ class TicketService {
         client
       );
 
-      await ticketRepository.updateEvent(
+      const updatedEvent = await ticketRepository.updateEvent(
         event.id,
         {
           category,
+          city,
           time,
           min_price,
           max_price,
@@ -635,7 +647,7 @@ class TicketService {
       }
 
       await ticketRepository.commitTransaction(client);
-      return event;
+      return updatedEvent || event;
     } catch (err) {
       await ticketRepository.rollbackTransaction(client);
       throw err;
@@ -652,6 +664,7 @@ class TicketService {
       seatConfig,
       zoneConfigs,
       category,
+      city,
       time,
       min_price,
       max_price,
@@ -674,6 +687,7 @@ class TicketService {
           start_time,
           event_type,
           category,
+          city,
           time,
           min_price,
           max_price,

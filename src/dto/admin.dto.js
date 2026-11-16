@@ -1,3 +1,5 @@
+const { EventResponseDTO } = require('./event.dto');
+
 // ============ REQUEST DTOs ============
 
 class CreateEventRequestDTO {
@@ -10,6 +12,7 @@ class CreateEventRequestDTO {
     this.seatConfig = body.seatConfig;
     this.zoneConfigs = body.zoneConfigs;
     this.category = body.category;
+    this.city = body.city;
     this.time = body.time;
     this.min_price = body.min_price;
     this.max_price = body.max_price;
@@ -86,6 +89,7 @@ class CreateEventRequestDTO {
       seatConfig: this.seatConfig,
       zoneConfigs: this.zoneConfigs,
       category: this.category,
+      city: this.city,
       time: this.time,
       min_price: this.min_price,
       max_price: this.max_price,
@@ -105,15 +109,7 @@ class CreateEventResponseDTO {
   constructor(event) {
     this.success = true;
     this.message = 'Tạo sự kiện và cấu hình ghế thành công!';
-    this.data = {
-      id: event.id,
-      title: event.title,
-      description: event.description,
-      location: event.location,
-      start_time: event.start_time,
-      event_type: event.event_type,
-      created_at: event.created_at
-    };
+    this.data = new EventResponseDTO(event).toJSON();
   }
 
   toJSON() {
