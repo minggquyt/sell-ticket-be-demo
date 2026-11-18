@@ -3,6 +3,7 @@ const path = require("path");
 const cors = require("cors");
 const indexRoutes = require("./src/routes/index.route");
 const logger = require("./src/utils/logger");
+const ticketRepository = require("./src/repositories/ticket.repository");
 const { startSeatReleaseJob } = require("./src/jobs/seat-release.job");
 const { SSE_HEARTBEAT_INTERVAL_MS } = require("./src/config/constants");
 const {
@@ -84,10 +85,25 @@ app.get("/logs", (req, res) => {
 app.use("/api", apiNotFoundMiddleware);
 app.use(apiErrorMiddleware);
 
-// Khởi động background job quét ghế hết hạn
-startSeatReleaseJob();
+// Khởi động an toàn: đảm bảo schema DB sẵn sàng trước khi mở job & HTTP traffic
+async function bootstrap() {
+  try {
+    await ticketRepository.ensureOrdersSchema();
+  } catch (err) {
+    logger.error(
+      "SCHEMA_BOOTSTRAP",
+      `Không thể kiểm tra cột orders.checkout_url (hãy chạy docs/migrations/add_order_checkout_url.sql): ${err.message}`,
+      err
+    );
+  }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`),
-);
+  // Khởi động background job quét ghế hết hạn
+  startSeatReleaseJob();
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () =>
+    console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`),
+  );
+}
+
+bootstrap();

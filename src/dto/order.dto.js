@@ -80,6 +80,8 @@ class OrderHistoryItemDTO {
     this.orderCode = Number(order.order_code);
     this.totalAmount = order.total_amount;
     this.status = order.order_status || order.status;
+    this.expiresAt = order.expires_at || null;
+    this.checkoutUrl = this.status === 'PAYMENT_PROCESSING' ? (order.checkout_url || null) : null;
     this.createdAt = order.created_at;
     this.eventId = order.event_id || null;
     this.eventTitle = order.event_title;
@@ -111,6 +113,8 @@ class OrderHistoryItemDTO {
       orderCode: this.orderCode,
       totalAmount: this.totalAmount,
       status: this.status,
+      expiresAt: this.expiresAt,
+      checkoutUrl: this.checkoutUrl,
       createdAt: this.createdAt,
       eventId: this.eventId,
       eventTitle: this.eventTitle,
@@ -143,6 +147,7 @@ class OrderStatusResponseDTO {
     this.data = {
       orderCode: Number(order.order_code),
       status: order.order_status,
+      checkoutUrl: order.order_status === 'PAYMENT_PROCESSING' ? (order.checkout_url || null) : null,
       totalAmount: Number(order.total_amount),
       expiresAt: order.expires_at,
       createdAt: order.created_at,
