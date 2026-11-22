@@ -79,6 +79,22 @@ ALTER TABLE public.orders DROP COLUMN IF EXISTS checkout_url;
 
 ---
 
+### 4. Order Payment Info (In-Site VietQR)
+**File**: `add_order_payment_info.sql`  
+**Purpose**: Lưu bền vững dữ liệu QR thanh toán từ PayOS (`payment_info jsonb`: `qrCode`, `bin`, `accountNumber`, `accountName`, `amount`, `description`, `currency`) trên bảng `orders` để Frontend render QR ngay trên web và khôi phục khi F5 / đổi thiết bị mà không cần gọi lại PayOS.
+
+**Apply**:
+```bash
+psql $DATABASE_URL -f docs/migrations/add_order_payment_info.sql
+```
+
+**Rollback**:
+```sql
+ALTER TABLE public.orders DROP COLUMN IF EXISTS payment_info;
+```
+
+---
+
 ## 📊 Migration History
 
 | Date | Migration | Status | Notes |
@@ -86,6 +102,7 @@ ALTER TABLE public.orders DROP COLUMN IF EXISTS checkout_url;
 | 2026-11-03 | add_performance_indexes.sql | ⏳ Pending | Safe to apply anytime |
 | 2026-11-03 | add_data_constraints.sql | ⏳ Pending | Check data first! |
 | 2026-11-18 | add_order_checkout_url.sql | ✅ Applied | Nullable column, safe & auto-verified on startup |
+| 2026-11-22 | add_order_payment_info.sql | ✅ Applied | Nullable jsonb column, safe & auto-verified on startup |
 
 ---
 
@@ -106,5 +123,7 @@ pg_dump $DATABASE_URL > backup_$(date +%Y%m%d_%H%M%S).sql
 
 ## 🔗 Related Documentation
 
+- [In-Site PayOS QR Checkout](../payment/IN_SITE_PAYOS_QR_CHECKOUT.md)
+- [Payment Flow](../payment/PAYMENT_FLOW.md)
 - [Code Review Fixes](../fixes/CODE_REVIEW_FIXES.md)
 - [Fixes Summary](../fixes/FIXES_SUMMARY.md)

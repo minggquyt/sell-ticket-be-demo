@@ -2,6 +2,12 @@
 
 Base URL: `http://localhost:3000/api/orders`
 
+> [!IMPORTANT]
+> Nội dung bên dưới là tài liệu **Legacy v1.2** (luồng cũ `/api/orders/checkout` chuyển hướng ra trang PayOS với timeout 5 phút).
+> Hệ thống hiện tại đã chuyển sang **In-Site PayOS QR Checkout** (`120s + 30s`, SSE realtime, hiển thị VietQR trực tiếp trên web). Team vui lòng tham khảo bộ tài liệu mới nhất tại:
+> - [IN_SITE_PAYOS_QR_CHECKOUT.md](../payment/IN_SITE_PAYOS_QR_CHECKOUT.md) — Đặc tả API & kiến trúc In-Site QR Checkout (`POST /api/seats/start-checkout`, `GET /api/orders/:orderCode/payment`, `GET /api/orders/:orderCode/events`, `POST /api/orders/:orderCode/cancel`, `GET /api/orders/:orderCode/status`)
+> - [PAYMENT_FLOW.md](../payment/PAYMENT_FLOW.md) — Sơ đồ vòng đời đơn hàng và luồng thanh toán hiện hành
+
 ---
 
 ## 1. Khởi tạo thanh toán (Checkout)

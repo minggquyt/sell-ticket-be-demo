@@ -15,17 +15,25 @@ docs/
 │   ├── authentication.md        # Auth APIs (Register, Login)
 │   ├── events.md                # Event APIs (List, Details)
 │   ├── seat-booking.md          # Seat Booking APIs (Hold, Confirm, Release)
-│   ├── orders-payment.md        # Order & Payment APIs (Checkout, History, Webhook)
+│   ├── orders-payment.md        # Order & Payment APIs (Legacy v1.2 reference)
 │   └── admin.md                 # Admin APIs (Create/Delete Events)
-├── fixes/                       # 🆕 Code Review Fixes (v1.3)
+├── payment/                     # 🆕 In-Site PayOS QR Checkout Docs
+│   ├── IN_SITE_PAYOS_QR_CHECKOUT.md # Đặc tả chi tiết QR nội bộ, SSE & 120s+30s
+│   └── PAYMENT_FLOW.md          # Sơ đồ vòng đời đơn hàng & luồng xử lý
+├── refund/                      # Hoàn tiền thủ công VietQR
+│   └── MANUAL_REFUND_VIETQR.md  # Quy trình & API hoàn tiền cho Admin/User
+├── fixes/                       # Code Review Fixes (v1.3)
 │   ├── README.md                # Index của fixes
 │   ├── CODE_REVIEW_FIXES.md     # Chi tiết đầy đủ 10 phát hiện
 │   ├── FIXES_SUMMARY.md         # Tóm tắt nhanh
 │   └── COMMIT_MESSAGE.txt       # Git commit message
-├── migrations/                  # 🆕 Database Migrations
+├── migrations/                  # Database Migrations
 │   ├── README.md                # Migration guide
 │   ├── add_performance_indexes.sql
-│   └── add_data_constraints.sql
+│   ├── add_data_constraints.sql
+│   ├── add_manual_refund_vietqr.sql
+│   ├── add_order_checkout_url.sql
+│   └── add_order_payment_info.sql
 └── versions/                    # Version History
     └── version-1.md             # Version 1 (v1.1 & v1.2)
 ```
@@ -34,6 +42,14 @@ docs/
 
 ## 🔗 Quick Links
 
+### Payment & Refund (🆕 In-Site PayOS QR Checkout)
+
+| Topic | File | Description |
+|-------|------|-------------|
+| **In-Site QR Checkout** | [payment/IN_SITE_PAYOS_QR_CHECKOUT.md](./payment/IN_SITE_PAYOS_QR_CHECKOUT.md) | Kiến trúc đưa PayOS QR về web, DB `payment_info`, SSE, chống 429 & `120s+30s` |
+| **Payment Flow** | [payment/PAYMENT_FLOW.md](./payment/PAYMENT_FLOW.md) | Sơ đồ trạng thái đơn hàng `WAITING`/`CONFIRMING`/trả muộn |
+| **Manual Refund VietQR** | [refund/MANUAL_REFUND_VIETQR.md](./refund/MANUAL_REFUND_VIETQR.md) | Quy trình Admin hoàn tiền thủ công qua VietQR (`REFUND_PENDING` → `REFUNDED`) |
+
 ### API Documentation
 
 | Topic | File | Description |
@@ -41,7 +57,7 @@ docs/
 | **Authentication** | [authentication.md](./api/authentication.md) | Đăng ký, đăng nhập, JWT token |
 | **Events** | [events.md](./api/events.md) | Lấy danh sách sự kiện, xem chi tiết ghế/zone |
 | **Seat Booking** | [seat-booking.md](./api/seat-booking.md) | Giữ ghế, xác nhận partial, hủy giữ chỗ |
-| **Orders & Payment** | [orders-payment.md](./api/orders-payment.md) | Thanh toán, lịch sử đơn hàng, PayOS webhook |
+| **Orders & Payment (Legacy)** | [orders-payment.md](./api/orders-payment.md) | Tham khảo API v1.2 (luồng mới xem mục Payment & Refund ở trên) |
 | **Admin** | [admin.md](./api/admin.md) | Tạo/xóa sự kiện (ADMIN only) |
 
 ### Version History
@@ -92,37 +108,46 @@ GET  /api/payos-webhook          # Health check webhook
 ### Customer Endpoints (Cần JWT token)
 
 ```
-POST /api/auth/register          # Đăng ký
-POST /api/auth/login             # Đăng nhập
+POST /api/auth/register                 # Đăng ký
+POST /api/auth/login                    # Đăng nhập
+GET  /api/auth/me/bank                  # Lấy TK ngân hàng nhận hoàn tiền
+PUT  /api/auth/me/bank                  # Cập nhật TK ngân hàng
 
-POST /api/seats/request-hold     # Giữ ghế
-POST /api/seats/confirm-partial  # Xác nhận giữ partial
-POST /api/seats/reserve-zone     # Giữ vé theo zone
-POST /api/seats/release          # Hủy giữ chỗ
+GET  /api/seats/my-active-session       # Đồng bộ phiên giữ ghế/thanh toán còn hạn
+POST /api/seats/reserve                 # Giữ ghế (30s)
+POST /api/seats/confirm-partial-hold    # Xác nhận giữ partial
+POST /api/seats/reserve-zone            # Giữ vé theo zone
+POST /api/seats/start-checkout          # Khởi tạo đơn & lấy VietQR payload
+POST /api/seats/release                 # Hủy giữ chỗ
 
-POST /api/orders/checkout        # Khởi tạo thanh toán
-GET  /api/orders/my-orders       # Lịch sử đơn hàng
+GET  /api/orders/my-history             # Lịch sử đơn hàng
+GET  /api/orders/:orderCode/payment     # Thông tin VietQR nội bộ (?sync=1 để đối soát)
+GET  /api/orders/:orderCode/events      # SSE stream cập nhật trạng thái đơn realtime
+GET  /api/orders/:orderCode/status      # Đồng bộ trạng thái đơn hàng
+POST /api/orders/:orderCode/cancel      # Hủy đơn (khóa 409 ở pha CONFIRMING 120..150s)
 ```
 
 ### Admin Endpoints (Cần JWT token + ADMIN role)
 
 ```
-POST   /api/admin/events         # Tạo sự kiện
-DELETE /api/admin/events/:id     # Xóa sự kiện
+POST   /api/admin/events                          # Tạo sự kiện
+PUT    /api/admin/events/:eventId                 # Cập nhật sự kiện
+DELETE /api/admin/events/:eventId                 # Xóa sự kiện
+GET    /api/admin/refunds                         # Danh sách đơn chờ/đã hoàn tiền
+POST   /api/admin/orders/:orderCode/confirm-refund # Xác nhận hoàn tiền VietQR
 ```
 
 ### Internal Endpoints (Webhook)
 
 ```
-POST /payos-webhook              # PayOS webhook
-POST /api/orders/webhook         # Test webhook (dev only)
+POST /api/payos-webhook          # PayOS webhook (HMAC SHA256 verification)
 ```
 
 ---
 
 ## 📊 Features
 
-### V1.2 (Current)
+### Current Architecture (In-Site PayOS QR Checkout)
 
 #### Authentication & Authorization
 - ✅ Đăng ký tài khoản với validation
@@ -143,17 +168,18 @@ POST /api/orders/webhook         # Test webhook (dev only)
 - ✅ Xác nhận giữ ghế một phần
 - ✅ Giữ vé theo khu vực (zone-based)
 - ✅ Hủy giữ chỗ
-- ✅ Tự động giải phóng ghế hết hạn (background job 60s)
+- ✅ Tự động giải phóng ghế hết hạn & đối soát cuối (background job 15s)
 - ✅ Giới hạn 4 vé/user
 - ✅ Thời gian giữ: 30 giây
 - ✅ One active hold per user
 
 #### Payment Integration
-- ✅ Tích hợp PayOS payment gateway
-- ✅ Tạo link thanh toán
-- ✅ Webhook xử lý kết quả thanh toán
-- ✅ Timeout thanh toán: 5 phút
-- ✅ Lịch sử đơn hàng
+- ✅ Tích hợp PayOS QR nội bộ (`paymentInfo` lưu trong bảng `orders`)
+- ✅ Thời gian quét QR `120s` + cửa sổ chờ webhook `30s` (`CONFIRMING`)
+- ✅ Webhook HMAC SHA256 + SSE `/api/orders/:orderCode/events` cập nhật realtime
+- ✅ Chống spam PayOS 429 bằng cooldown `10s`/đơn & gộp request trùng
+- ✅ Thanh toán quá `120s` tự động chuyển `REFUND_PENDING` (hoàn tiền thủ công VietQR)
+- ✅ Lịch sử đơn hàng (`GET /api/orders/my-history`)
 
 #### Logging & Monitoring
 - ✅ HTTP request logging
@@ -265,8 +291,13 @@ http://localhost:3000
 | Constant | Value | Location |
 |----------|-------|----------|
 | MAX_TICKETS_PER_USER | 4 | src/config/constants.js |
-| SEAT_HOLD_DURATION | 30s | src/config/constants.js |
-| PAYMENT_TIMEOUT | 5 min | src/config/constants.js |
+| SEAT_HOLD_DURATION_SECONDS | 30s | src/config/constants.js |
+| PAYMENT_TIMEOUT_SECONDS | 120s | src/config/constants.js |
+| PAYMENT_CONFIRM_WINDOW_SECONDS | 30s | src/config/constants.js |
+| PAYOS_SYNC_COOLDOWN_MS | 10s | src/config/constants.js |
+| SEAT_RELEASE_JOB_INTERVAL_MS | 15s | src/config/constants.js |
+| SSE_HEARTBEAT_INTERVAL_MS | 15s | src/config/constants.js |
+| SSE_ORDER_MAX_DURATION_MS | 180s | src/config/constants.js |
 | JWT_EXPIRES_IN | 1 day | src/config/constants.js |
 | BCRYPT_SALT_ROUNDS | 10 | src/config/constants.js |
 | DB_CONNECTION_POOL | 20 | src/config/db.js |
@@ -365,6 +396,6 @@ Nếu có câu hỏi hoặc cần hỗ trợ, vui lòng:
 
 ---
 
-**📅 Last Updated:** 2024-10-18  
-**📖 Current Version:** 1.2  
-**🔖 Documentation Version:** 1.0
+**📅 Last Updated:** 2026-11-22  
+**📖 Current Version:** 1.4  
+**🔖 Documentation Version:** 1.1
