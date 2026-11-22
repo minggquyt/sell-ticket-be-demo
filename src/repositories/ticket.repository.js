@@ -28,16 +28,22 @@ class TicketRepository {
   }
 
   /**
-   * Đảm bảo cột checkout_url tồn tại trên bảng orders (idempotent, không lock bảng nếu đã có).
+   * Đảm bảo các cột checkout_url và payment_info tồn tại trên bảng orders (idempotent).
    */
   async ensureOrdersSchema() {
     const check = await pool.query(
-      `SELECT 1 FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'checkout_url'
-       LIMIT 1;`
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'orders'
+         AND column_name IN ('checkout_url', 'payment_info');`
     );
-    if (check.rows.length > 0) return;
-    await pool.query(`ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS checkout_url text;`);
+    const existing = new Set(check.rows.map((r) => r.column_name));
+    if (!existing.has('checkout_url')) {
+      await pool.query(`ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS checkout_url text;`);
+    }
+    if (!existing.has('payment_info')) {
+      await pool.query(`ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS payment_info jsonb;`);
+    }
   }
 
   // ==================== Events ====================
@@ -181,7 +187,25 @@ class TicketRepository {
     return result.rows;
   }
 
-  async releaseExpiredSeats() {
+  async getExpiredProcessingOrderCodes(confirmWindowSeconds = 30) {
+    const result = await pool.query(
+      `SELECT o.order_code
+       FROM orders o
+       WHERE o.status = 'PAYMENT_PROCESSING'
+         AND o.expires_at + make_interval(secs => $1) < NOW()
+         AND NOT EXISTS (
+           SELECT 1 FROM seats s
+           WHERE s.current_order_code = o.order_code
+             AND s.status IN ('RESERVED', 'PAYMENT_PROCESSING')
+             AND s.reserved_until >= NOW()
+         )
+       ORDER BY o.expires_at ASC;`,
+      [Number(confirmWindowSeconds) || 30]
+    );
+    return result.rows.map((r) => Number(r.order_code)).filter((c) => Number.isInteger(c) && c > 0);
+  }
+
+  async releaseExpiredSeats(confirmWindowSeconds = 30) {
     const result = await pool.query(
       `WITH target_seats AS (
          SELECT id, current_order_code
@@ -196,27 +220,37 @@ class TicketRepository {
          WHERE s.id = ts.id
          RETURNING s.id, s.seat_number, ts.current_order_code
        ),
+       target_orders AS (
+         SELECT o.order_code
+         FROM orders o
+         WHERE o.status = 'PAYMENT_PROCESSING'
+           AND o.expires_at + make_interval(secs => $1) < NOW()
+           AND NOT EXISTS (
+             SELECT 1 FROM seats s
+             WHERE s.current_order_code = o.order_code
+               AND s.status IN ('RESERVED', 'PAYMENT_PROCESSING')
+               AND s.reserved_until >= NOW()
+           )
+         FOR UPDATE SKIP LOCKED
+       ),
        expired_orders AS (
          UPDATE orders o
          SET status = 'EXPIRED'
-         WHERE o.status = 'PAYMENT_PROCESSING'
-           AND (
-             o.order_code IN (SELECT current_order_code FROM target_seats WHERE current_order_code IS NOT NULL)
-             OR (
-               o.expires_at < NOW()
-               AND NOT EXISTS (
-                 SELECT 1 FROM seats s
-                 WHERE s.current_order_code = o.order_code
-                   AND s.status IN ('RESERVED', 'PAYMENT_PROCESSING')
-                   AND s.reserved_until >= NOW()
-               )
-             )
-           )
+         FROM target_orders tord
+         WHERE o.order_code = tord.order_code
          RETURNING o.order_code
        )
-       SELECT id, seat_number, current_order_code FROM released_seats;`
+       SELECT
+         COALESCE((SELECT json_agg(row_to_json(rs)) FROM released_seats rs), '[]'::json) AS released_seats,
+         COALESCE((SELECT json_agg(eo.order_code) FROM expired_orders eo), '[]'::json) AS expired_order_codes;`,
+      [Number(confirmWindowSeconds) || 30]
     );
-    return result.rows;
+    const row = result.rows[0] || {};
+    const releasedSeats = Array.isArray(row.released_seats) ? row.released_seats : [];
+    const expiredOrderCodes = Array.isArray(row.expired_order_codes)
+      ? row.expired_order_codes.map((c) => Number(c)).filter((c) => Number.isInteger(c) && c > 0)
+      : [];
+    return { releasedSeats, expiredOrderCodes };
   }
 
   async checkActiveHold(userId) {
@@ -242,6 +276,7 @@ class TicketRepository {
         s.status AS seat_status,
         s.reserved_until,
         s.current_order_code,
+        o.expires_at AS order_expires_at,
         CASE WHEN o.status = 'PAYMENT_PROCESSING' THEN o.checkout_url ELSE NULL END AS checkout_url,
         e.title AS event_title,
         e.event_type,
@@ -497,6 +532,7 @@ class TicketRepository {
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
+        e.start_time AS event_start_time,
         e.location,
         COALESCE(
           json_agg(
@@ -542,6 +578,7 @@ class TicketRepository {
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
+        e.start_time AS event_start_time,
         e.location,
         COALESCE(
           json_agg(
@@ -577,6 +614,7 @@ class TicketRepository {
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
+        e.start_time AS event_start_time,
         e.location,
         COALESCE(
           json_agg(
@@ -647,10 +685,12 @@ class TicketRepository {
         o.status AS order_status,
         o.expires_at,
         CASE WHEN o.status = 'PAYMENT_PROCESSING' THEN o.checkout_url ELSE NULL END AS checkout_url,
+        CASE WHEN o.status = 'PAYMENT_PROCESSING' THEN o.payment_info ELSE NULL END AS payment_info,
         o.created_at,
         e.id AS event_id,
         e.title AS event_title,
         e.event_type,
+        e.start_time AS event_start_time,
         e.location,
         COALESCE(
           json_agg(
@@ -714,6 +754,16 @@ class TicketRepository {
     await dbClient.query(
       `UPDATE orders SET checkout_url = $1 WHERE order_code = $2;`,
       [checkoutUrl, orderCode]
+    );
+  }
+
+  async updateOrderPaymentData(orderCode, checkoutUrl, paymentInfo, dbClient = pool) {
+    await dbClient.query(
+      `UPDATE orders
+       SET checkout_url = $1,
+           payment_info = $2::jsonb
+       WHERE order_code = $3;`,
+      [checkoutUrl || null, paymentInfo ? JSON.stringify(paymentInfo) : null, orderCode]
     );
   }
 

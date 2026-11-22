@@ -13,13 +13,15 @@ module.exports = {
   // FIX #9: Magic numbers -> Named constants
   SEAT_HOLD_DURATION_SECONDS: 30,
   PAYMENT_TIMEOUT_SECONDS: 120,
-  PAYMENT_GRACE_SECONDS: 30,
+  PAYMENT_CONFIRM_WINDOW_SECONDS: 30,
+  PAYOS_SYNC_COOLDOWN_MS: 10 * 1000,
   MAX_TICKETS_PER_USER: 4,
   
   // Cron job & Background tasks
   SEAT_RELEASE_JOB_INTERVAL_MS: 15 * 1000, // 15 seconds
   SSE_HEARTBEAT_INTERVAL_MS: 15 * 1000, // 15 seconds
   SSE_CLIENT_TIMEOUT_MS: 60 * 1000, // 60 seconds
+  SSE_ORDER_MAX_DURATION_MS: 180 * 1000, // 180 seconds (120s + 30s + 30s buffer)
   
   // Logging
   MAX_RECENT_LOGS: 200,

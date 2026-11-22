@@ -92,7 +92,7 @@ async function bootstrap() {
   } catch (err) {
     logger.error(
       "SCHEMA_BOOTSTRAP",
-      `Không thể kiểm tra cột orders.checkout_url (hãy chạy docs/migrations/add_order_checkout_url.sql): ${err.message}`,
+      `Không thể kiểm tra cột orders.checkout_url / orders.payment_info (hãy chạy docs/migrations/add_order_checkout_url.sql và docs/migrations/add_order_payment_info.sql): ${err.message}`,
       err
     );
   }
