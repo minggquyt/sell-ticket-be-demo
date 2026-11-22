@@ -3,6 +3,7 @@ const router = express.Router();
 const ticketController = require('../controllers/ticket.controller');
 const { verifyToken, authorizeRoles } = require('../middlewares/auth.middleware');
 
+router.get('/my-active-session', verifyToken, ticketController.getMyActiveSession);
 router.post('/reserve', verifyToken, authorizeRoles('CUSTOMER'), ticketController.requestSeatHold);
 router.post('/confirm-partial-hold', verifyToken, ticketController.confirmPartialHold);
 router.post('/reserve-zone', verifyToken, ticketController.reserveZone);

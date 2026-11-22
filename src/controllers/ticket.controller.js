@@ -200,6 +200,17 @@ exports.getOrderStatus = async (req, res) => {
   }
 };
 
+exports.getMyActiveSession = async (req, res) => {
+  try {
+    const session = await ticketService.getUserActiveHoldSession(req.user.id);
+    return res.json({ success: true, data: session });
+  } catch (err) {
+    logger.error('GET_MY_ACTIVE_SESSION', err.message, err);
+    const errorDto = new SeatErrorDTO(err.message || 'Không thể tải phiên giữ chỗ hiện tại.');
+    return res.status(500).json(errorDto.toJSON());
+  }
+};
+
 exports.startCheckout = async (req, res) => {
   try {
     logger.payment('START_CHECKOUT_REQUEST', `Raw body: ${JSON.stringify({

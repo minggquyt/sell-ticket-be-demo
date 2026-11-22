@@ -63,12 +63,29 @@ ALTER TABLE orders DROP CONSTRAINT IF EXISTS chk_citizen_id_format;
 
 ---
 
+### 3. Order PayOS Checkout URL
+**File**: `add_order_checkout_url.sql`  
+**Purpose**: Lưu bền vững `checkout_url` trên bảng `orders` để khôi phục phiên thanh toán xuyên thiết bị / restart server
+
+**Apply**:
+```bash
+psql $DATABASE_URL -f docs/migrations/add_order_checkout_url.sql
+```
+
+**Rollback**:
+```sql
+ALTER TABLE public.orders DROP COLUMN IF EXISTS checkout_url;
+```
+
+---
+
 ## 📊 Migration History
 
 | Date | Migration | Status | Notes |
 |------|-----------|--------|-------|
 | 2026-11-03 | add_performance_indexes.sql | ⏳ Pending | Safe to apply anytime |
 | 2026-11-03 | add_data_constraints.sql | ⏳ Pending | Check data first! |
+| 2026-11-18 | add_order_checkout_url.sql | ✅ Applied | Nullable column, safe & auto-verified on startup |
 
 ---
 

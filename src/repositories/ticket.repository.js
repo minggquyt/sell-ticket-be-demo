@@ -27,6 +27,19 @@ class TicketRepository {
     }
   }
 
+  /**
+   * Đảm bảo cột checkout_url tồn tại trên bảng orders (idempotent, không lock bảng nếu đã có).
+   */
+  async ensureOrdersSchema() {
+    const check = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'checkout_url'
+       LIMIT 1;`
+    );
+    if (check.rows.length > 0) return;
+    await pool.query(`ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS checkout_url text;`);
+  }
+
   // ==================== Events ====================
   async getAllEvents() {
     const result = await pool.query(
@@ -216,6 +229,33 @@ class TicketRepository {
       [userId]
     );
     return result.rows.length > 0;
+  }
+
+  async getActiveHoldByUserId(userId, dbClient = pool) {
+    const result = await dbClient.query(
+      `SELECT
+        s.id AS seat_id,
+        s.event_id,
+        s.seat_number,
+        s.zone_name,
+        s.price,
+        s.status AS seat_status,
+        s.reserved_until,
+        s.current_order_code,
+        CASE WHEN o.status = 'PAYMENT_PROCESSING' THEN o.checkout_url ELSE NULL END AS checkout_url,
+        e.title AS event_title,
+        e.event_type,
+        e.location
+       FROM seats s
+       JOIN events e ON s.event_id = e.id
+       LEFT JOIN orders o ON s.current_order_code = o.order_code
+       WHERE s.reserved_by = $1
+         AND s.status IN ('RESERVED', 'PAYMENT_PROCESSING')
+         AND s.reserved_until > NOW()
+       ORDER BY s.reserved_until DESC, s.seat_number ASC;`,
+      [userId]
+    );
+    return result.rows;
   }
 
   // ==================== Seat Locking & Holding ====================
@@ -447,6 +487,8 @@ class TicketRepository {
         o.total_amount,
         o.status AS order_status,
         o.status,
+        o.expires_at,
+        CASE WHEN o.status = 'PAYMENT_PROCESSING' THEN o.checkout_url ELSE NULL END AS checkout_url,
         o.created_at,
         o.refund_bank_error,
         o.refund_snapshot,
@@ -459,6 +501,7 @@ class TicketRepository {
         COALESCE(
           json_agg(
             json_build_object(
+              'seat_id', s.id,
               'seat_number', s.seat_number,
               'zone_name', s.zone_name,
               'price', oi.price
@@ -603,6 +646,7 @@ class TicketRepository {
         o.total_amount,
         o.status AS order_status,
         o.expires_at,
+        CASE WHEN o.status = 'PAYMENT_PROCESSING' THEN o.checkout_url ELSE NULL END AS checkout_url,
         o.created_at,
         e.id AS event_id,
         e.title AS event_title,
@@ -663,6 +707,13 @@ class TicketRepository {
     await dbClient.query(
       `UPDATE orders SET status = $1 WHERE order_code = $2;`,
       [status, orderCode]
+    );
+  }
+
+  async updateOrderCheckoutUrl(orderCode, checkoutUrl, dbClient = pool) {
+    await dbClient.query(
+      `UPDATE orders SET checkout_url = $1 WHERE order_code = $2;`,
+      [checkoutUrl, orderCode]
     );
   }
 

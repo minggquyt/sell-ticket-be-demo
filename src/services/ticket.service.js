@@ -315,6 +315,7 @@ class TicketService {
         };
         const paymentLink = await payos.paymentRequests.create(payosOrder);
         checkoutUrl = paymentLink.checkoutUrl;
+        await ticketRepository.updateOrderCheckoutUrl(orderCode, checkoutUrl, client);
       } catch (payErr) {
         logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`, payErr);
         throw new Error(`Không thể tạo liên kết thanh toán PayOS: ${payErr.message}`);
@@ -528,6 +529,65 @@ class TicketService {
     }
 
     return order;
+  }
+
+  /**
+   * Trả về phiên giữ ghế (RESERVED) hoặc thanh toán (PAYMENT_PROCESSING) đang hoạt động
+   * của user hiện tại trên toàn hệ thống, dùng để đồng bộ xuyên thiết bị/trình duyệt.
+   */
+  async getUserActiveHoldSession(userId) {
+    await ticketRepository.releaseExpiredSeats();
+    const rows = await ticketRepository.getActiveHoldByUserId(userId);
+    if (!rows || rows.length === 0) return null;
+
+    const processingRow = rows.find(
+      (r) => r.seat_status === 'PAYMENT_PROCESSING' && r.current_order_code
+    );
+
+    if (processingRow) {
+      const order = await this.getOrderStatusAndSync(userId, processingRow.current_order_code);
+      if (!order || order.order_status !== 'PAYMENT_PROCESSING') {
+        return null;
+      }
+      if (order.expires_at && new Date(order.expires_at) <= new Date()) {
+        return null;
+      }
+      const itemRows = Array.isArray(order.items) && order.items.length > 0 ? order.items : rows;
+      return {
+        step: 'PAYMENT_PROCESSING',
+        eventId: order.event_id || processingRow.event_id,
+        eventTitle: order.event_title || processingRow.event_title,
+        eventType: order.event_type || processingRow.event_type,
+        orderCode: Number(order.order_code),
+        checkoutUrl: order.checkout_url || processingRow.checkout_url || null,
+        totalAmount: Number(order.total_amount),
+        reservedUntil: order.expires_at || processingRow.reserved_until,
+        seats: itemRows.map((item) => ({
+          id: item.seat_id,
+          seat_number: item.seat_number,
+          zone_name: item.zone_name,
+          price: Number(item.price),
+        })),
+      };
+    }
+
+    const totalAmount = rows.reduce((sum, r) => sum + Number(r.price || 0), 0);
+    return {
+      step: 'RESERVED',
+      eventId: rows[0].event_id,
+      eventTitle: rows[0].event_title,
+      eventType: rows[0].event_type,
+      orderCode: null,
+      checkoutUrl: null,
+      totalAmount,
+      reservedUntil: rows[0].reserved_until,
+      seats: rows.map((r) => ({
+        id: r.seat_id,
+        seat_number: r.seat_number,
+        zone_name: r.zone_name,
+        price: Number(r.price),
+      })),
+    };
   }
 
   // ==================== Admin Functions ====================
