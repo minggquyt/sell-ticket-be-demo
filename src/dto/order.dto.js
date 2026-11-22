@@ -1,3 +1,5 @@
+const { computeOrderTiming } = require('../utils/payos-time');
+
 // ============ REQUEST DTOs ============
 
 class CheckoutRequestDTO {
@@ -38,13 +40,20 @@ class CheckoutRequestDTO {
 class CheckoutResponseDTO {
   constructor(result) {
     this.success = true;
-    this.message = 'Khởi tạo thanh toán PayOS thành công!';
+    this.message = 'Khởi tạo thanh toán thành công!';
+    const timing = computeOrderTiming(
+      result.expiresAt || result.paymentTimeout,
+      'PAYMENT_PROCESSING',
+    );
     this.data = {
       orderCode: Number(result.orderCode),
-      checkoutUrl: result.checkoutUrl,
-      totalAmount: result.totalAmount,
-      paymentTimeout: result.paymentTimeout,
-      expiredAt: result.expiredAt
+      totalAmount: Number(result.totalAmount),
+      expiresAt: result.expiresAt || timing.expiresAt,
+      confirmUntil: result.confirmUntil || timing.confirmUntil,
+      paymentTimeout: result.paymentTimeout || result.expiresAt || timing.expiresAt,
+      expiredAt: result.expiredAt,
+      serverTime: result.serverTime || timing.serverTime,
+      paymentInfo: result.paymentInfo || null,
     };
   }
 
@@ -75,17 +84,54 @@ class OrderItemDTO {
   }
 }
 
+class OrderPaymentResponseDTO {
+  constructor(order, now = new Date()) {
+    const status = order.order_status || order.status;
+    const timing = computeOrderTiming(order.expires_at, status, now);
+
+    this.success = true;
+    this.data = {
+      orderCode: Number(order.order_code),
+      status,
+      phase: timing.phase,
+      totalAmount: Number(order.total_amount),
+      expiresAt: timing.expiresAt,
+      confirmUntil: timing.confirmUntil,
+      serverTime: timing.serverTime,
+      createdAt: order.created_at || null,
+      paymentInfo: status === 'PAYMENT_PROCESSING' ? (order.payment_info || null) : null,
+      eventId: order.event_id || null,
+      eventTitle: order.event_title || null,
+      eventType: order.event_type || null,
+      eventStartTime: order.event_start_time || null,
+      location: order.location || null,
+      items: (order.items || []).map((item) => new OrderItemDTO(item).toJSON()),
+    };
+  }
+
+  toJSON() {
+    return {
+      success: this.success,
+      data: this.data,
+    };
+  }
+}
+
 class OrderHistoryItemDTO {
-  constructor(order) {
+  constructor(order, now = new Date()) {
     this.orderCode = Number(order.order_code);
     this.totalAmount = order.total_amount;
     this.status = order.order_status || order.status;
-    this.expiresAt = order.expires_at || null;
+    const timing = computeOrderTiming(order.expires_at, this.status, now);
+    this.expiresAt = order.expires_at || timing.expiresAt || null;
+    this.confirmUntil = timing.confirmUntil;
+    this.phase = timing.phase;
     this.checkoutUrl = this.status === 'PAYMENT_PROCESSING' ? (order.checkout_url || null) : null;
     this.createdAt = order.created_at;
     this.eventId = order.event_id || null;
     this.eventTitle = order.event_title;
     this.eventType = order.event_type;
+    this.eventStartTime = order.event_start_time || null;
     this.location = order.location;
     this.customerName = order.customer_name || null;
     this.customerEmail = order.customer_email || null;
@@ -114,11 +160,14 @@ class OrderHistoryItemDTO {
       totalAmount: this.totalAmount,
       status: this.status,
       expiresAt: this.expiresAt,
+      confirmUntil: this.confirmUntil,
+      phase: this.phase,
       checkoutUrl: this.checkoutUrl,
       createdAt: this.createdAt,
       eventId: this.eventId,
       eventTitle: this.eventTitle,
       eventType: this.eventType,
+      eventStartTime: this.eventStartTime,
       location: this.location,
       ...(this.customerName ? { customerName: this.customerName } : {}),
       ...(this.customerEmail ? { customerEmail: this.customerEmail } : {}),
@@ -142,18 +191,25 @@ class OrderHistoryResponseDTO {
 }
 
 class OrderStatusResponseDTO {
-  constructor(order) {
+  constructor(order, now = new Date()) {
+    const status = order.order_status || order.status;
+    const timing = computeOrderTiming(order.expires_at, status, now);
+
     this.success = true;
     this.data = {
       orderCode: Number(order.order_code),
-      status: order.order_status,
-      checkoutUrl: order.order_status === 'PAYMENT_PROCESSING' ? (order.checkout_url || null) : null,
+      status,
+      phase: timing.phase,
+      checkoutUrl: status === 'PAYMENT_PROCESSING' ? (order.checkout_url || null) : null,
       totalAmount: Number(order.total_amount),
-      expiresAt: order.expires_at,
+      expiresAt: timing.expiresAt || order.expires_at,
+      confirmUntil: timing.confirmUntil,
+      serverTime: timing.serverTime,
       createdAt: order.created_at,
       eventId: order.event_id,
       eventTitle: order.event_title,
       eventType: order.event_type,
+      eventStartTime: order.event_start_time || null,
       location: order.location,
       items: (order.items || []).map(item => new OrderItemDTO(item).toJSON())
     };
@@ -186,6 +242,7 @@ module.exports = {
   CheckoutRequestDTO,
   // Response DTOs
   CheckoutResponseDTO,
+  OrderPaymentResponseDTO,
   OrderHistoryResponseDTO,
   OrderHistoryItemDTO,
   OrderStatusResponseDTO,

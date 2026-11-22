@@ -4,10 +4,101 @@ const logger = require('../utils/logger');
 const {
   SEAT_HOLD_DURATION_SECONDS,
   PAYMENT_TIMEOUT_SECONDS,
-  MAX_TICKETS_PER_USER
+  PAYMENT_CONFIRM_WINDOW_SECONDS,
+  PAYOS_SYNC_COOLDOWN_MS,
+  MAX_TICKETS_PER_USER,
 } = require('../config/constants');
+const {
+  parsePayOSTransactionTime,
+  extractLatestPaidAt,
+  isPaidWithinDeadline,
+  computeOrderTiming,
+} = require('../utils/payos-time');
+const paymentEvents = require('../utils/payment-events');
 
 class TicketService {
+  constructor() {
+    this.payosSyncLastAt = new Map();
+    this.payosSyncInFlight = new Map();
+  }
+
+  createHttpError(statusCode, message) {
+    const err = new Error(message);
+    err.statusCode = statusCode;
+    return err;
+  }
+
+  buildOrderPaymentPayload(order, now = new Date()) {
+    if (!order) return null;
+    const status = order.order_status || order.status;
+    const timing = computeOrderTiming(
+      order.expires_at,
+      status,
+      now,
+      PAYMENT_CONFIRM_WINDOW_SECONDS,
+    );
+    const items = Array.isArray(order.items)
+      ? order.items.map((item) => ({
+          ...(item.seat_id ? { seatId: item.seat_id } : {}),
+          seatNumber: item.seat_number,
+          zoneName: item.zone_name,
+          price: Number(item.price),
+        }))
+      : [];
+
+    return {
+      orderCode: Number(order.order_code),
+      status,
+      phase: timing.phase,
+      totalAmount: Number(order.total_amount),
+      expiresAt: timing.expiresAt,
+      confirmUntil: timing.confirmUntil,
+      serverTime: timing.serverTime,
+      createdAt: order.created_at || null,
+      paymentInfo: status === 'PAYMENT_PROCESSING' ? (order.payment_info || null) : null,
+      eventId: order.event_id || null,
+      eventTitle: order.event_title || null,
+      eventType: order.event_type || null,
+      eventStartTime: order.event_start_time || null,
+      location: order.location || null,
+      items,
+    };
+  }
+
+  async emitOrderStatusSnapshot(orderCode) {
+    try {
+      const numericCode = Number(orderCode);
+      if (!Number.isInteger(numericCode) || numericCode <= 0) return;
+
+      const freshOrder = await ticketRepository.getOrderWithItemsByCode(numericCode);
+      if (!freshOrder) return;
+
+      const orderPayload = this.buildOrderPaymentPayload(freshOrder);
+      paymentEvents.emitOrderUpdate(numericCode, {
+        type: 'STATUS_CHANGED',
+        orderCode: orderPayload.orderCode,
+        status: orderPayload.status,
+        phase: orderPayload.phase,
+        serverTime: orderPayload.serverTime,
+        order: orderPayload,
+      });
+    } catch (err) {
+      logger.error('SSE_EMIT_ORDER', `Không thể phát sự kiện SSE cho đơn #${orderCode}: ${err.message}`, err);
+    }
+  }
+
+  async releaseExpiredSeatsAndNotify() {
+    const { releasedSeats, expiredOrderCodes } = await ticketRepository.releaseExpiredSeats(
+      PAYMENT_CONFIRM_WINDOW_SECONDS,
+    );
+    if (Array.isArray(expiredOrderCodes) && expiredOrderCodes.length > 0) {
+      for (const code of expiredOrderCodes) {
+        await this.emitOrderStatusSnapshot(code);
+      }
+    }
+    return { releasedSeats, expiredOrderCodes };
+  }
+
   // ==================== Customer Functions ====================
   async getUserOrderHistory(userId) {
     return await ticketRepository.getUserOrderHistory(userId);
@@ -18,12 +109,12 @@ class TicketService {
   }
 
   async getSeatsByEvent(eventId) {
-    await ticketRepository.releaseExpiredSeats();
+    await this.releaseExpiredSeatsAndNotify();
     return await ticketRepository.getSeatsByEvent(eventId);
   }
 
   async getZonesByEvent(eventId) {
-    await ticketRepository.releaseExpiredSeats();
+    await this.releaseExpiredSeatsAndNotify();
     return await ticketRepository.getZonesByEvent(eventId);
   }
 
@@ -189,6 +280,7 @@ class TicketService {
   // ==================== Release Seats & Cancel ====================
   async releaseReservedSeats(userId, seatIds, orderCode = null) {
     const client = await ticketRepository.beginTransaction();
+    let txClosed = false;
     try {
       let effectiveSeatIds = Array.isArray(seatIds) ? [...seatIds].filter(Boolean) : [];
 
@@ -207,17 +299,19 @@ class TicketService {
 
       const releasedRows = await ticketRepository.releaseSeatsByIds(effectiveSeatIds, userId, client);
 
-      const orderCodes = [...new Set(releasedRows.map(r => r.current_order_code).filter(Boolean))];
+      const orderCodes = [...new Set(releasedRows.map((r) => r.current_order_code).filter(Boolean))];
       if (orderCode) {
         orderCodes.push(Number(orderCode));
       }
       const uniqueOrderCodes = [...new Set(orderCodes.filter(Boolean))];
 
+      let updatedOrders = [];
       if (uniqueOrderCodes.length > 0) {
-        await ticketRepository.cancelOrExpireProcessingOrders(uniqueOrderCodes, client);
+        updatedOrders = await ticketRepository.cancelOrExpireProcessingOrders(uniqueOrderCodes, client);
       }
 
       await ticketRepository.commitTransaction(client);
+      txClosed = true;
 
       for (const code of uniqueOrderCodes) {
         try {
@@ -228,11 +322,18 @@ class TicketService {
         }
       }
 
-      logger.release(`User ${userId} đã hủy/nhả ${releasedRows.length} ghế [${releasedRows.map(r => r.seat_number).join(', ')}] về AVAILABLE`);
+      for (const ord of updatedOrders) {
+        await this.emitOrderStatusSnapshot(ord.order_code);
+      }
+
+      logger.release(`User ${userId} đã hủy/nhả ${releasedRows.length} ghế [${releasedRows.map((r) => r.seat_number).join(', ')}] về AVAILABLE`);
 
       return releasedRows;
     } catch (err) {
-      await ticketRepository.rollbackTransaction(client);
+      if (!txClosed) {
+        await ticketRepository.rollbackTransaction(client);
+        txClosed = true;
+      }
       logger.error('SEAT_RELEASE', err.message, err);
       throw err;
     }
@@ -241,9 +342,73 @@ class TicketService {
   async cancelOrder(userId, orderCode) {
     const numericCode = Number(orderCode);
     if (!Number.isInteger(numericCode) || numericCode <= 0) {
-      throw new Error('Mã đơn hàng không hợp lệ.');
+      throw this.createHttpError(400, 'Mã đơn hàng không hợp lệ.');
     }
-    return await this.releaseReservedSeats(userId, [], numericCode);
+
+    const client = await ticketRepository.beginTransaction();
+    let txClosed = false;
+    let releasedRows = [];
+    try {
+      const order = await ticketRepository.getOrderByCodeForUpdate(numericCode, client);
+      if (!order || String(order.user_id) !== String(userId)) {
+        throw this.createHttpError(404, 'Không tìm thấy đơn hàng hoặc bạn không có quyền truy cập.');
+      }
+
+      if (order.status !== 'PAYMENT_PROCESSING') {
+        throw this.createHttpError(
+          409,
+          `Không thể hủy đơn hàng vì đơn đang ở trạng thái ${order.status}.`,
+        );
+      }
+
+      const timing = computeOrderTiming(
+        order.expires_at,
+        order.status,
+        new Date(),
+        PAYMENT_CONFIRM_WINDOW_SECONDS,
+      );
+      if (timing.isPastExpiresAt) {
+        throw this.createHttpError(
+          409,
+          'Đơn hàng đang trong quá trình xác nhận giao dịch với ngân hàng, vui lòng chờ giây lát.',
+        );
+      }
+
+      await ticketRepository.updateOrderStatus(numericCode, 'CANCELLED', client);
+      releasedRows = await ticketRepository.releaseSeatsByOrderCode(numericCode, client);
+      await ticketRepository.commitTransaction(client);
+      txClosed = true;
+    } catch (err) {
+      if (!txClosed) {
+        await ticketRepository.rollbackTransaction(client);
+        txClosed = true;
+      }
+      if (!err.statusCode) {
+        logger.error('CANCEL_ORDER', err.message, err);
+      }
+      throw err;
+    }
+
+    try {
+      await payos.paymentRequests.cancel(numericCode, 'User cancelled order');
+      logger.payment('CANCEL', `Đã hủy link PayOS cho đơn #${numericCode}`);
+    } catch (cancelErr) {
+      logger.payment(
+        'WARN',
+        `Không thể hủy link PayOS cho đơn #${numericCode} (có thể đã hết hạn/hủy trước đó): ${cancelErr.message}`,
+      );
+    }
+
+    await this.emitOrderStatusSnapshot(numericCode);
+    logger.release(
+      `User ${userId} đã hủy đơn #${numericCode} và nhả ${releasedRows.length} ghế [${releasedRows.map((r) => r.seat_number).join(', ')}] về AVAILABLE`,
+    );
+
+    return {
+      orderCode: numericCode,
+      status: 'CANCELLED',
+      releasedSeats: releasedRows,
+    };
   }
 
   // ==================== Checkout ====================
@@ -258,7 +423,7 @@ class TicketService {
       })}`);
 
       const uniqueSeatIds = [...new Set(seatIds)];
-      
+
       // FIX #1: Race condition - Lock ghế và verify ownership trong cùng transaction
       const seatRows = await ticketRepository.getSeatsByIdsForUpdate(uniqueSeatIds, client);
 
@@ -268,31 +433,25 @@ class TicketService {
 
       const now = new Date();
       let total = 0;
-      
+
       // FIX #1: Kiểm tra chặt chẽ ownership và status
       for (const seat of seatRows) {
-        // Kiểm tra ghế phải đang được user này giữ
         if (seat.reserved_by !== userId) {
           throw new Error(`Ghế ${seat.seat_number} không thuộc quyền sở hữu của bạn.`);
         }
-        
-        // Kiểm tra status phải là RESERVED (chưa checkout)
         if (seat.status !== 'RESERVED') {
           throw new Error(`Ghế ${seat.seat_number} đã được thanh toán hoặc không còn hợp lệ.`);
         }
-        
-        // Kiểm tra chưa hết hạn giữ chỗ
         if (new Date(seat.reserved_until) <= now) {
           throw new Error(`Ghế ${seat.seat_number} đã hết hạn giữ chỗ.`);
         }
-        
         total += Number(seat.price);
       }
 
       const nowSec = Math.floor(Date.now() / 1000);
       const expiredAt = nowSec + PAYMENT_TIMEOUT_SECONDS;
       const paymentTimeout = new Date(expiredAt * 1000);
-      const seatReservedUntil = paymentTimeout;
+      const confirmUntil = new Date((expiredAt + PAYMENT_CONFIRM_WINDOW_SECONDS) * 1000);
 
       const order = await ticketRepository.createOrder(userId, total, paymentTimeout, client);
       const orderCode = Number(order.order_code);
@@ -301,21 +460,42 @@ class TicketService {
         await ticketRepository.createOrderItem(orderCode, s.id, s.price, client);
       }
 
-      await ticketRepository.updateSeatsToPaymentProcessing(seatReservedUntil, orderCode, uniqueSeatIds, client);
+      // Ghế giữ đến confirmUntil (T + 150s) để bảo vệ giao dịch ở giây 119 khi webhook về chậm
+      await ticketRepository.updateSeatsToPaymentProcessing(confirmUntil, orderCode, uniqueSeatIds, client);
+
+      const frontendOrigin = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173').replace(/\/$/, '');
+      const defaultCheckoutUrl = `${frontendOrigin}/checkout/${orderCode}`;
 
       let checkoutUrl = null;
+      let paymentInfo = null;
       try {
+        const description = `VE SU KIEN ${orderCode}`.slice(0, 25);
         const payosOrder = {
           orderCode,
           amount: Number(total),
-          description: `VE SU KIEN ${orderCode}`.slice(0, 25),
+          description,
           expiredAt,
-          returnUrl: returnUrl || `http://127.0.0.1:5500/index.html?orderCode=${orderCode}&status=success`,
-          cancelUrl: cancelUrl || `http://127.0.0.1:5500/index.html?orderCode=${orderCode}&status=cancel`,
+          returnUrl: returnUrl || defaultCheckoutUrl,
+          cancelUrl: cancelUrl || defaultCheckoutUrl,
         };
         const paymentLink = await payos.paymentRequests.create(payosOrder);
-        checkoutUrl = paymentLink.checkoutUrl;
-        await ticketRepository.updateOrderCheckoutUrl(orderCode, checkoutUrl, client);
+        if (!paymentLink || !paymentLink.qrCode) {
+          throw new Error('PayOS không trả về chuỗi mã QR hợp lệ.');
+        }
+
+        checkoutUrl = paymentLink.checkoutUrl || null;
+        paymentInfo = {
+          paymentLinkId: paymentLink.paymentLinkId || null,
+          bin: String(paymentLink.bin || ''),
+          accountNumber: String(paymentLink.accountNumber || ''),
+          accountName: String(paymentLink.accountName || ''),
+          amount: Number(paymentLink.amount ?? total),
+          description: String(paymentLink.description || description),
+          qrCode: String(paymentLink.qrCode),
+          currency: String(paymentLink.currency || 'VND'),
+        };
+
+        await ticketRepository.updateOrderPaymentData(orderCode, checkoutUrl, paymentInfo, client);
       } catch (payErr) {
         logger.error('PAYOS_LINK_CREATION', `Lỗi tạo link PayOS cho đơn #${orderCode}: ${payErr.message}`, payErr);
         throw new Error(`Không thể tạo liên kết thanh toán PayOS: ${payErr.message}`);
@@ -323,14 +503,22 @@ class TicketService {
 
       await ticketRepository.commitTransaction(client);
 
-      logger.payment('START', `User ${userId} tạo đơn #${orderCode} | ${seatRows.length} ghế | Tổng tiền: ${total.toLocaleString()}đ | Hết hạn sau ${PAYMENT_TIMEOUT_SECONDS}s`);
+      const serverTime = new Date().toISOString();
+      logger.payment(
+        'START',
+        `User ${userId} tạo đơn #${orderCode} | ${seatRows.length} ghế | Tổng tiền: ${total.toLocaleString()}đ | Hết hạn sau ${PAYMENT_TIMEOUT_SECONDS}s (+${PAYMENT_CONFIRM_WINDOW_SECONDS}s chờ webhook)`,
+      );
 
-      return { 
-        orderCode, 
-        checkoutUrl, 
-        totalAmount: total, 
-        paymentTimeout,
-        expiredAt
+      return {
+        orderCode,
+        checkoutUrl,
+        totalAmount: Number(total),
+        expiresAt: paymentTimeout.toISOString(),
+        confirmUntil: confirmUntil.toISOString(),
+        paymentTimeout: paymentTimeout.toISOString(),
+        expiredAt,
+        serverTime,
+        paymentInfo,
       };
     } catch (err) {
       await ticketRepository.rollbackTransaction(client);
@@ -340,12 +528,17 @@ class TicketService {
   }
 
   // ==================== Webhook & Sync ====================
-  async handlePaymentWebhook(orderCode, isSuccess, paidAmount = null) {
+  async handlePaymentWebhook(orderCode, isSuccess, paidAmount = null, transactionDateTime = null) {
     const client = await ticketRepository.beginTransaction();
+    let txClosed = false;
+    let finalOrderStatus = null;
+    let prevOrderStatus = null;
+    const numericOrderCode = Number(orderCode);
+
     try {
-      const numericOrderCode = Number(orderCode);
       if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
         await ticketRepository.rollbackTransaction(client);
+        txClosed = true;
         logger.payment('WARN', `Mã đơn hàng không hợp lệ từ webhook: ${orderCode}`);
         return { success: true, message: 'Mã đơn hàng không hợp lệ.' };
       }
@@ -353,28 +546,35 @@ class TicketService {
       const order = await ticketRepository.getOrderByCodeForUpdate(numericOrderCode, client);
       if (!order) {
         await ticketRepository.rollbackTransaction(client);
+        txClosed = true;
         logger.payment('WARN', `Không tìm thấy đơn hàng #${numericOrderCode} (có thể là ping test từ PayOS)`);
         return { success: true, message: 'Đơn hàng không tồn tại hoặc là ping test từ cổng thanh toán.' };
       }
 
+      prevOrderStatus = order.status;
+
       if (order.status === 'SUCCESS') {
         await ticketRepository.commitTransaction(client);
+        txClosed = true;
         logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái SUCCESS từ trước.`);
         return { status: 'SUCCESS', orderCode: numericOrderCode };
       }
 
       if (order.status === 'REFUNDED') {
         await ticketRepository.commitTransaction(client);
+        txClosed = true;
         logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái REFUNDED từ trước.`);
         return { status: 'REFUNDED', orderCode: numericOrderCode };
       }
 
       if (order.status === 'REFUND_PENDING') {
         await ticketRepository.commitTransaction(client);
+        txClosed = true;
         logger.payment('INFO', `Đơn #${numericOrderCode} đã ở trạng thái REFUND_PENDING từ trước.`);
         return { status: 'REFUND_PENDING', orderCode: numericOrderCode };
       }
 
+      const paidAt = parsePayOSTransactionTime(transactionDateTime);
       let validSuccess = Boolean(isSuccess);
       if (validSuccess && paidAmount !== null && Number(paidAmount) < Number(order.total_amount)) {
         logger.payment('WARN', `Đơn #${numericOrderCode} thanh toán thiếu tiền: Nhận ${paidAmount} < Cần ${order.total_amount}`);
@@ -382,11 +582,9 @@ class TicketService {
       }
 
       let updatedSeats = [];
-      let finalOrderStatus = order.status;
+      finalOrderStatus = order.status;
 
       if (validSuccess) {
-        // TRƯỜNG HỢP A: Đơn đã ở trạng thái CANCELLED, EXPIRED hoặc FAILED từ trước ->
-        // Chuyển tiếp đúng trình tự vòng đời: CANCELLED / EXPIRED / FAILED -> REFUND_PENDING
         if (['CANCELLED', 'EXPIRED', 'FAILED'].includes(order.status)) {
           const prevStatus = order.status;
           await ticketRepository.releaseSeatsByOrderCode(numericOrderCode, client);
@@ -394,22 +592,22 @@ class TicketService {
           finalOrderStatus = 'REFUND_PENDING';
           logger.payment(
             'REFUND_PENDING',
-            `Đơn #${numericOrderCode} đã ở trạng thái ${prevStatus} nhưng ghi nhận tiền vào -> Chuyển trạng thái ${prevStatus} -> REFUND_PENDING (Chờ hoàn tiền)!`
+            `Đơn #${numericOrderCode} đã ở trạng thái ${prevStatus} nhưng ghi nhận tiền vào -> Chuyển trạng thái ${prevStatus} -> REFUND_PENDING (Chờ hoàn tiền)!`,
           );
         } else if (order.status === 'PAYMENT_PROCESSING') {
           const orderItems = await ticketRepository.getOrderItemsWithSeatsForUpdate(numericOrderCode, client);
-          const isExpiredByTime = Boolean(order.expires_at && new Date(order.expires_at) <= new Date());
+          // Quy tắc chặt: chỉ hợp lệ khi thời điểm chuyển tiền <= expires_at (quá 1ms cũng bị chặn)
+          const isPaidOnTime = isPaidWithinDeadline(paidAt, order.expires_at);
 
           const isStillActivelyHeld =
-            !isExpiredByTime &&
             orderItems.length > 0 &&
             orderItems.every(
               (item) =>
                 item.seat_status === 'PAYMENT_PROCESSING' &&
-                Number(item.current_order_code) === numericOrderCode
+                Number(item.current_order_code) === numericOrderCode,
             );
 
-          if (isStillActivelyHeld) {
+          if (isPaidOnTime && isStillActivelyHeld) {
             const seatIdsToSell = orderItems.map((item) => item.current_seat_id);
             const soldRows = await ticketRepository.markSeatsAsSold(seatIdsToSell, numericOrderCode, client);
 
@@ -419,31 +617,26 @@ class TicketService {
               updatedSeats = soldRows;
               logger.payment('SUCCESS', `Đơn #${numericOrderCode} THANH TOÁN THÀNH CÔNG! ${updatedSeats.length} ghế thành SOLD`);
             } else {
-              // BƯỚC 1: PAYMENT_PROCESSING -> CANCELLED & nhả ghế
               await ticketRepository.updateOrderStatus(numericOrderCode, 'CANCELLED', client);
               await ticketRepository.releaseSeatsByOrderCode(numericOrderCode, client);
-              // BƯỚC 2: CANCELLED -> REFUND_PENDING
               await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
               finalOrderStatus = 'REFUND_PENDING';
               logger.payment('REFUND_PENDING', `Đơn #${numericOrderCode} không giữ đủ ${orderItems.length} ghế -> Chuyển PAYMENT_PROCESSING -> CANCELLED -> REFUND_PENDING!`);
             }
           } else {
-            // Đơn quá hạn 2 phút hoặc mất quyền giữ ghế:
-            // BƯỚC 1: Chuyển PAYMENT_PROCESSING -> EXPIRED (hoặc CANCELLED) và nhả ghế về AVAILABLE
-            const stepOneStatus = isExpiredByTime ? 'EXPIRED' : 'CANCELLED';
+            const stepOneStatus = !isPaidOnTime ? 'EXPIRED' : 'CANCELLED';
             await ticketRepository.updateOrderStatus(numericOrderCode, stepOneStatus, client);
             await ticketRepository.releaseSeatsByOrderCode(numericOrderCode, client);
             logger.payment(
               stepOneStatus === 'EXPIRED' ? 'EXPIRED' : 'CANCEL',
-              `Đơn #${numericOrderCode} đã ${isExpiredByTime ? 'quá hạn 2 phút' : 'mất giữ chỗ'} -> Chuyển trạng thái PAYMENT_PROCESSING -> ${stepOneStatus} và nhả ghế về AVAILABLE.`
+              `Đơn #${numericOrderCode} ${!isPaidOnTime ? `thanh toán muộn (paidAt=${paidAt.toISOString()} > expiresAt=${order.expires_at ? new Date(order.expires_at).toISOString() : 'null'})` : 'mất giữ chỗ'} -> Chuyển PAYMENT_PROCESSING -> ${stepOneStatus} và nhả ghế về AVAILABLE.`,
             );
 
-            // BƯỚC 2: Chuyển từ EXPIRED / CANCELLED -> REFUND_PENDING
             await ticketRepository.updateOrderStatus(numericOrderCode, 'REFUND_PENDING', client);
             finalOrderStatus = 'REFUND_PENDING';
             logger.payment(
               'REFUND_PENDING',
-              `Đơn #${numericOrderCode} nhận được tiền sau khi ${stepOneStatus} -> Chuyển trạng thái ${stepOneStatus} -> REFUND_PENDING (Chờ hoàn tiền)!`
+              `Đơn #${numericOrderCode} nhận được tiền sau khi ${stepOneStatus} -> Chuyển trạng thái ${stepOneStatus} -> REFUND_PENDING (Chờ hoàn tiền)!`,
             );
           }
         }
@@ -459,76 +652,173 @@ class TicketService {
       }
 
       await ticketRepository.commitTransaction(client);
-
-      return { status: finalOrderStatus, orderCode: numericOrderCode };
+      txClosed = true;
     } catch (err) {
-      await ticketRepository.rollbackTransaction(client);
+      if (!txClosed) {
+        await ticketRepository.rollbackTransaction(client);
+        txClosed = true;
+      }
       logger.error('HANDLE_PAYMENT_WEBHOOK', err.message, err);
       throw err;
     }
+
+    if (finalOrderStatus && finalOrderStatus !== prevOrderStatus) {
+      await this.emitOrderStatusSnapshot(numericOrderCode);
+    }
+
+    return { status: finalOrderStatus, orderCode: numericOrderCode };
+  }
+
+  async syncOrderWithPayOSThrottled(order, { force = false } = {}) {
+    if (!order) return null;
+    const numericOrderCode = Number(order.order_code);
+    const status = order.order_status || order.status;
+
+    if (!['PAYMENT_PROCESSING', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status)) {
+      return null;
+    }
+
+    if (this.payosSyncInFlight.has(numericOrderCode)) {
+      return this.payosSyncInFlight.get(numericOrderCode);
+    }
+
+    const nowMs = Date.now();
+    const lastAt = this.payosSyncLastAt.get(numericOrderCode) || 0;
+    if (!force && lastAt && nowMs - lastAt < PAYOS_SYNC_COOLDOWN_MS) {
+      return null;
+    }
+
+    // Dọn cache cooldown cũ nếu map phình to
+    if (this.payosSyncLastAt.size > 200) {
+      for (const [k, ts] of this.payosSyncLastAt.entries()) {
+        if (nowMs - ts > 5 * 60 * 1000) this.payosSyncLastAt.delete(k);
+      }
+    }
+
+    const syncPromise = (async () => {
+      this.payosSyncLastAt.set(numericOrderCode, Date.now());
+      try {
+        const payosData = await payos.paymentRequests.get(numericOrderCode);
+        const hasPaidFullAmount =
+          payosData?.status === 'PAID' ||
+          (Number(payosData?.amountPaid) >= Number(order.total_amount) && Number(order.total_amount) > 0);
+
+        if (hasPaidFullAmount) {
+          const paidAt = extractLatestPaidAt(payosData?.transactions);
+          await this.handlePaymentWebhook(
+            numericOrderCode,
+            true,
+            payosData.amountPaid || payosData.amount,
+            paidAt,
+          );
+          return await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+        }
+
+        if (status === 'PAYMENT_PROCESSING') {
+          const timing = computeOrderTiming(
+            order.expires_at,
+            status,
+            new Date(),
+            PAYMENT_CONFIRM_WINDOW_SECONDS,
+          );
+          const isPayosCancelled = payosData?.status === 'CANCELLED';
+
+          // Tuyệt đối không đánh EXPIRED trong pha CONFIRMING (120s..150s) dù PayOS báo EXPIRED
+          if (isPayosCancelled || timing.isPastConfirmUntil) {
+            const nextStatus = isPayosCancelled && !timing.isPastExpiresAt ? 'CANCELLED' : 'EXPIRED';
+            const client = await ticketRepository.beginTransaction();
+            let didTransition = false;
+            try {
+              const locked = await ticketRepository.getOrderByCodeForUpdate(numericOrderCode, client);
+              if (locked && locked.status === 'PAYMENT_PROCESSING') {
+                await ticketRepository.updateOrderStatus(numericOrderCode, nextStatus, client);
+                await ticketRepository.releaseSeatsByOrderCode(numericOrderCode, client);
+                didTransition = true;
+              }
+              await ticketRepository.commitTransaction(client);
+              if (didTransition) {
+                logger.payment(
+                  nextStatus === 'EXPIRED' ? 'EXPIRED' : 'CANCEL',
+                  `Đồng bộ đơn #${numericOrderCode}: Chuyển PAYMENT_PROCESSING -> ${nextStatus} và nhả ghế về AVAILABLE.`,
+                );
+              }
+            } catch (txErr) {
+              await ticketRepository.rollbackTransaction(client);
+              logger.error('SYNC_ORDER_STATUS', txErr.message, txErr);
+            }
+
+            if (didTransition) {
+              await this.emitOrderStatusSnapshot(numericOrderCode);
+              return await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+            }
+          }
+        }
+
+        return null;
+      } catch (err) {
+        logger.payment('WARN', `Không thể đồng bộ trạng thái đơn #${numericOrderCode} từ PayOS: ${err.message}`);
+        return null;
+      } finally {
+        if (this.payosSyncInFlight.get(numericOrderCode) === syncPromise) {
+          this.payosSyncInFlight.delete(numericOrderCode);
+        }
+      }
+    })();
+
+    this.payosSyncInFlight.set(numericOrderCode, syncPromise);
+    return syncPromise;
+  }
+
+  async getOrderPaymentForUser(userId, orderCode, { sync = false } = {}) {
+    const numericOrderCode = Number(orderCode);
+    if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
+      throw this.createHttpError(400, 'Mã đơn hàng không hợp lệ.');
+    }
+
+    let order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+    if (!order || String(order.user_id) !== String(userId)) {
+      throw this.createHttpError(404, 'Không tìm thấy đơn hàng hoặc bạn không có quyền truy cập.');
+    }
+
+    if (sync && order.order_status === 'PAYMENT_PROCESSING') {
+      const synced = await this.syncOrderWithPayOSThrottled(order);
+      if (synced) {
+        order = synced;
+      }
+    }
+
+    return order;
   }
 
   async getOrderStatusAndSync(userId, orderCode) {
     const numericOrderCode = Number(orderCode);
     if (!Number.isInteger(numericOrderCode) || numericOrderCode <= 0) {
-      throw new Error('Mã đơn hàng không hợp lệ.');
+      throw this.createHttpError(400, 'Mã đơn hàng không hợp lệ.');
     }
 
-    let order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
-    if (!order || order.user_id !== userId) {
-      throw new Error('Không tìm thấy đơn hàng hoặc bạn không có quyền truy cập.');
+    const order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
+    if (!order || String(order.user_id) !== String(userId)) {
+      throw this.createHttpError(404, 'Không tìm thấy đơn hàng hoặc bạn không có quyền truy cập.');
     }
 
-    if (
-      order.order_status === 'PAYMENT_PROCESSING' ||
-      order.order_status === 'CANCELLED' ||
-      order.order_status === 'EXPIRED' ||
-      order.order_status === 'FAILED'
-    ) {
+    const synced = await this.syncOrderWithPayOSThrottled(order);
+    return synced || order;
+  }
+
+  async reconcileExpiredProcessingOrders() {
+    const expiredCodes = await ticketRepository.getExpiredProcessingOrderCodes(
+      PAYMENT_CONFIRM_WINDOW_SECONDS,
+    );
+    for (const code of expiredCodes) {
       try {
-        const paymentInfo = await payos.paymentRequests.get(numericOrderCode);
-        const hasPaidFullAmount =
-          paymentInfo?.status === 'PAID' ||
-          (Number(paymentInfo?.amountPaid) >= Number(order.total_amount) && Number(order.total_amount) > 0);
-
-        if (hasPaidFullAmount) {
-          await this.handlePaymentWebhook(
-            numericOrderCode,
-            true,
-            paymentInfo.amountPaid || paymentInfo.amount
-          );
-          order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
-        } else if (order.order_status === 'PAYMENT_PROCESSING') {
-          const isExpiredByTime = Boolean(order.expires_at && new Date(order.expires_at) <= new Date());
-          if (
-            paymentInfo?.status === 'CANCELLED' ||
-            paymentInfo?.status === 'EXPIRED' ||
-            isExpiredByTime
-          ) {
-            const nextStatus =
-              paymentInfo?.status === 'CANCELLED' && !isExpiredByTime ? 'CANCELLED' : 'EXPIRED';
-            const client = await ticketRepository.beginTransaction();
-            try {
-              await ticketRepository.updateOrderStatus(numericOrderCode, nextStatus, client);
-              await ticketRepository.releaseSeatsByOrderCode(numericOrderCode, client);
-              await ticketRepository.commitTransaction(client);
-              logger.payment(
-                nextStatus === 'EXPIRED' ? 'EXPIRED' : 'CANCEL',
-                `Đồng bộ đơn #${numericOrderCode}: Chuyển trạng thái PAYMENT_PROCESSING -> ${nextStatus} và nhả ghế về AVAILABLE.`
-              );
-            } catch (txErr) {
-              await ticketRepository.rollbackTransaction(client);
-              logger.error('SYNC_ORDER_STATUS', txErr.message, txErr);
-            }
-            order = await ticketRepository.getOrderWithItemsByCode(numericOrderCode);
-          }
+        const order = await ticketRepository.getOrderWithItemsByCode(code);
+        if (order && order.order_status === 'PAYMENT_PROCESSING') {
+          await this.syncOrderWithPayOSThrottled(order, { force: true });
         }
       } catch (err) {
-        logger.payment('WARN', `Không thể đồng bộ trạng thái đơn #${numericOrderCode} từ PayOS: ${err.message}`);
+        logger.payment('WARN', `Lỗi đối soát đơn quá hạn #${code}: ${err.message}`);
       }
     }
-
-    return order;
   }
 
   /**
@@ -536,12 +826,12 @@ class TicketService {
    * của user hiện tại trên toàn hệ thống, dùng để đồng bộ xuyên thiết bị/trình duyệt.
    */
   async getUserActiveHoldSession(userId) {
-    await ticketRepository.releaseExpiredSeats();
+    await this.releaseExpiredSeatsAndNotify();
     const rows = await ticketRepository.getActiveHoldByUserId(userId);
     if (!rows || rows.length === 0) return null;
 
     const processingRow = rows.find(
-      (r) => r.seat_status === 'PAYMENT_PROCESSING' && r.current_order_code
+      (r) => r.seat_status === 'PAYMENT_PROCESSING' && r.current_order_code,
     );
 
     if (processingRow) {
@@ -549,9 +839,17 @@ class TicketService {
       if (!order || order.order_status !== 'PAYMENT_PROCESSING') {
         return null;
       }
-      if (order.expires_at && new Date(order.expires_at) <= new Date()) {
+
+      const timing = computeOrderTiming(
+        order.expires_at,
+        order.order_status,
+        new Date(),
+        PAYMENT_CONFIRM_WINDOW_SECONDS,
+      );
+      if (timing.isPastConfirmUntil) {
         return null;
       }
+
       const itemRows = Array.isArray(order.items) && order.items.length > 0 ? order.items : rows;
       return {
         step: 'PAYMENT_PROCESSING',
@@ -559,9 +857,13 @@ class TicketService {
         eventTitle: order.event_title || processingRow.event_title,
         eventType: order.event_type || processingRow.event_type,
         orderCode: Number(order.order_code),
-        checkoutUrl: order.checkout_url || processingRow.checkout_url || null,
+        checkoutUrl: null,
         totalAmount: Number(order.total_amount),
         reservedUntil: order.expires_at || processingRow.reserved_until,
+        expiresAt: timing.expiresAt,
+        confirmUntil: timing.confirmUntil,
+        serverTime: timing.serverTime,
+        phase: timing.phase,
         seats: itemRows.map((item) => ({
           id: item.seat_id,
           seat_number: item.seat_number,
@@ -581,6 +883,7 @@ class TicketService {
       checkoutUrl: null,
       totalAmount,
       reservedUntil: rows[0].reserved_until,
+      serverTime: new Date().toISOString(),
       seats: rows.map((r) => ({
         id: r.seat_id,
         seat_number: r.seat_number,

@@ -1,6 +1,7 @@
 const ticketService = require('../services/ticket.service');
 const payos = require('../config/payos');
 const logger = require('../utils/logger');
+const paymentEvents = require('../utils/payment-events');
 const {
   EventResponseDTO,
   EventListResponseDTO,
@@ -23,6 +24,7 @@ const {
 const {
   CheckoutRequestDTO,
   CheckoutResponseDTO,
+  OrderPaymentResponseDTO,
   OrderHistoryResponseDTO,
   OrderStatusResponseDTO,
   ErrorResponseDTO: OrderErrorDTO
@@ -172,7 +174,7 @@ exports.cancelOrder = async (req, res) => {
     return res.json({ success: true, message: 'Đã hủy đơn hàng thành công.', data: result });
   } catch (err) {
     const errorDto = new OrderErrorDTO(err.message);
-    return res.status(400).json(errorDto.toJSON());
+    return res.status(err.statusCode || 400).json(errorDto.toJSON());
   }
 };
 
@@ -189,6 +191,50 @@ exports.getMyOrders = async (req, res) => {
   }
 };
 
+exports.getOrderPayment = async (req, res) => {
+  try {
+    const sync = req.query?.sync === '1' || req.query?.sync === 'true';
+    const order = await ticketService.getOrderPaymentForUser(req.user.id, req.params.orderCode, { sync });
+    const responseDto = new OrderPaymentResponseDTO(order);
+    return res.json(responseDto.toJSON());
+  } catch (err) {
+    const errorDto = new OrderErrorDTO(err.message);
+    return res.status(err.statusCode || 400).json(errorDto.toJSON());
+  }
+};
+
+exports.streamOrderEvents = async (req, res) => {
+  let order;
+  try {
+    order = await ticketService.getOrderPaymentForUser(req.user.id, req.params.orderCode, { sync: false });
+  } catch (err) {
+    const errorDto = new OrderErrorDTO(err.message);
+    return res.status(err.statusCode || 400).json(errorDto.toJSON());
+  }
+
+  const orderData = new OrderPaymentResponseDTO(order).data;
+  const initPayload = {
+    type: 'INIT',
+    orderCode: orderData.orderCode,
+    status: orderData.status,
+    phase: orderData.phase,
+    serverTime: orderData.serverTime,
+    order: orderData,
+  };
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+
+  const unsubscribe = paymentEvents.subscribe(orderData.orderCode, res, initPayload);
+  req.on('close', unsubscribe);
+  res.on('close', unsubscribe);
+};
+
 exports.getOrderStatus = async (req, res) => {
   try {
     const order = await ticketService.getOrderStatusAndSync(req.user.id, req.params.orderCode);
@@ -196,7 +242,7 @@ exports.getOrderStatus = async (req, res) => {
     return res.json(responseDto.toJSON());
   } catch (err) {
     const errorDto = new OrderErrorDTO(err.message);
-    return res.status(404).json(errorDto.toJSON());
+    return res.status(err.statusCode || 404).json(errorDto.toJSON());
   }
 };
 
@@ -267,9 +313,10 @@ exports.payosWebhook = async (req, res) => {
     const orderCode = verifiedData?.orderCode;
     const isSuccess = webhookData?.code === '00' && verifiedData?.code === '00' && webhookData?.success !== false;
     const amount = verifiedData?.amount;
+    const transactionDateTime = verifiedData?.transactionDateTime || null;
 
     if (orderCode) {
-      const result = await ticketService.handlePaymentWebhook(orderCode, isSuccess, amount);
+      const result = await ticketService.handlePaymentWebhook(orderCode, isSuccess, amount, transactionDateTime);
       logger.payment('WEBHOOK_PROCESSED', `Đã xử lý xong Webhook cho đơn #${orderCode} -> Trạng thái: ${result?.status || (isSuccess ? 'SUCCESS' : 'FAILED')}`);
     }
 

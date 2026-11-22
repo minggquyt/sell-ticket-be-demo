@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS public.events (
   rules jsonb
 );
 
--- 2.5 orders (7 cột - dùng order_code 9 chữ số từ sequence làm PRIMARY KEY)
+-- 2.5 orders (8 cột - dùng order_code 9 chữ số từ sequence làm PRIMARY KEY)
 CREATE TABLE IF NOT EXISTS public.orders (
   order_code bigint PRIMARY KEY DEFAULT nextval('public.orders_order_code_seq'),
   user_id uuid NOT NULL REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE CASCADE,
@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS public.orders (
   status order_status DEFAULT 'PAYMENT_PROCESSING',
   expires_at timestamptz NOT NULL,
   created_at timestamptz DEFAULT now(),
-  checkout_url text
+  checkout_url text,
+  payment_info jsonb
 );
 
 ALTER SEQUENCE public.orders_order_code_seq OWNED BY public.orders.order_code;
