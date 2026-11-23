@@ -235,12 +235,13 @@ class RegisterResponseDTO {
 }
 
 class LoginResponseDTO {
-  constructor(token, user) {
+  constructor(token, user, serverTime = new Date().toISOString()) {
     this.success = true;
     this.message = 'Đăng nhập thành công!';
     this.data = {
       token,
-      user: new UserResponseDTO(user).toJSON()
+      user: new UserResponseDTO(user).toJSON(),
+      serverTime: serverTime || new Date().toISOString(),
     };
   }
 

@@ -7,7 +7,7 @@ if (!process.env.JWT_SECRET) {
 
 module.exports = {
   JWT_SECRET: process.env.JWT_SECRET,
-  JWT_EXPIRES_IN: '1d',
+  JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '1d',
   BCRYPT_SALT_ROUNDS: 10,
   
   // FIX #9: Magic numbers -> Named constants

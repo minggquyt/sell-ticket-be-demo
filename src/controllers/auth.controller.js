@@ -53,7 +53,7 @@ exports.login = async (req, res) => {
     const result = await authService.login(email, password);
     
     // Response DTO: Format output
-    const responseDto = new LoginResponseDTO(result.token, result.user);
+    const responseDto = new LoginResponseDTO(result.token, result.user, result.serverTime);
     return res.json(responseDto.toJSON());
   } catch (err) {
     logger.error('AUTH_LOGIN', err.message, err);
