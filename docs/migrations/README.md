@@ -4,6 +4,43 @@ SQL migrations cho các cải tiến từ code review.
 
 ## 📁 Available Migrations
 
+### Email OTP Registration (3-step process)
+
+#### Step 1: Base Tables
+**File**: `../../temp/add_email_registration_otp.sql`
+
+**Purpose**: Tạo bảng `pending_registrations` và `registration_otps` với index cơ bản.
+
+```bash
+psql $DATABASE_URL -f temp/add_email_registration_otp.sql
+```
+
+#### Step 2: Cancel Support
+**File**: `add_registration_cancelled_status.sql`
+
+**Purpose**: Thêm trạng thái `CANCELLED` cho pending registrations.
+
+```bash
+psql $DATABASE_URL -f docs/migrations/add_registration_cancelled_status.sql
+```
+
+#### Step 3: Performance & Security
+**File**: `add_email_registration_indexes.sql`
+
+**Purpose**: Thêm indexes hiệu năng, Row Level Security, và CASCADE delete.
+
+```bash
+psql $DATABASE_URL -f docs/migrations/add_email_registration_indexes.sql
+```
+
+**Features được thêm**:
+- Case-insensitive unique email indexes
+- Performance indexes cho expiry và OTP queries
+- Row Level Security cho bảng chứa password hash và OTP
+- Cascade delete cho cleanup tự động
+
+---
+
 ### 1. Performance Indexes
 **File**: `add_performance_indexes.sql`  
 **Purpose**: Tối ưu performance cho các query thường xuyên
@@ -99,10 +136,13 @@ ALTER TABLE public.orders DROP COLUMN IF EXISTS payment_info;
 
 | Date | Migration | Status | Notes |
 |------|-----------|--------|-------|
+| 2026-01-23 | add_email_registration_otp.sql | ✅ Applied | Base tables created |
+| 2026-01-23 | add_registration_cancelled_status.sql | ✅ Applied | Cancel support added |
+| 2026-01-23 | add_email_registration_indexes.sql | ⏳ Pending | Performance & security |
 | 2026-11-03 | add_performance_indexes.sql | ⏳ Pending | Safe to apply anytime |
 | 2026-11-03 | add_data_constraints.sql | ⏳ Pending | Check data first! |
-| 2026-11-18 | add_order_checkout_url.sql | ✅ Applied | Nullable column, safe & auto-verified on startup |
-| 2026-11-22 | add_order_payment_info.sql | ✅ Applied | Nullable jsonb column, safe & auto-verified on startup |
+| 2026-11-18 | add_order_checkout_url.sql | ✅ Applied | Nullable column, safe |
+| 2026-11-22 | add_order_payment_info.sql | ✅ Applied | Nullable jsonb column |
 
 ---
 
@@ -127,3 +167,4 @@ pg_dump $DATABASE_URL > backup_$(date +%Y%m%d_%H%M%S).sql
 - [Payment Flow](../payment/PAYMENT_FLOW.md)
 - [Code Review Fixes](../fixes/CODE_REVIEW_FIXES.md)
 - [Fixes Summary](../fixes/FIXES_SUMMARY.md)
+- [Authentication API](../api/authentication.md) - Email OTP registration flow

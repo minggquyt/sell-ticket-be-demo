@@ -12,11 +12,11 @@
 docs/
 ├── README.md                    # Trang này
 ├── api/                         # API Documentation
-│   ├── authentication.md        # Auth APIs (Register, Login, Profile/Bank)
-│   ├── events.md                # Event APIs (List, Details)
-│   ├── seat-booking.md          # Seat Booking APIs (Hold, Confirm, Release)
-│   ├── orders-payment.md        # Order & Payment APIs (Legacy v1.2 reference)
-│   └── admin.md                 # Admin APIs (Create/Delete Events)
+│   ├── authentication.md        # Auth, profile và ngân hàng hoàn tiền
+│   ├── events.md                # Danh sách event, ghế và zone
+│   ├── seat-booking.md          # Hold, session, checkout và release
+│   ├── orders-payment.md        # Order, PayOS, SSE và webhook hiện hành
+│   └── admin.md                 # Ticket, refund và quản trị event
 ├── auth/                        # 🆕 Auth Expiry & Error Contract Docs
 │   └── AUTO_LOGOUT_EXPIRED_TOKEN.md # Chuẩn lỗi 401/403, serverTime & đồng bộ auto-logout FE
 ├── payment/                     # 🆕 In-Site PayOS QR Checkout Docs
@@ -60,8 +60,8 @@ docs/
 | **Auto-Logout & Auth Contract** | [auth/AUTO_LOGOUT_EXPIRED_TOKEN.md](./auth/AUTO_LOGOUT_EXPIRED_TOKEN.md) | Tách bạch `401` (`AUTH_REQUIRED`/`TOKEN_EXPIRED`/`TOKEN_INVALID`) vs `403 FORBIDDEN`, `JWT_EXPIRES_IN` & `serverTime` |
 | **Events** | [events.md](./api/events.md) | Lấy danh sách sự kiện, xem chi tiết ghế/zone |
 | **Seat Booking** | [seat-booking.md](./api/seat-booking.md) | Giữ ghế, xác nhận partial, hủy giữ chỗ |
-| **Orders & Payment (Legacy)** | [orders-payment.md](./api/orders-payment.md) | Tham khảo API v1.2 (luồng mới xem mục Payment & Refund ở trên) |
-| **Admin** | [admin.md](./api/admin.md) | Tạo/xóa sự kiện (ADMIN only) |
+| **Orders & Payment** | [orders-payment.md](./api/orders-payment.md) | Lịch sử, QR PayOS, trạng thái, SSE, hủy order và webhook |
+| **Admin** | [admin.md](./api/admin.md) | Ticket, refund, tạo/cập nhật/xóa sự kiện (ADMIN only) |
 
 ### Version History
 
@@ -104,7 +104,7 @@ stream are not JSON API responses.
 
 ```
 GET  /api/events                 # Lấy danh sách sự kiện
-GET  /api/events/:eventId        # Xem chi tiết sự kiện
+GET  /api/events/:eventId/details # Xem ghế/zone (?type=ZONE_BASED)
 GET  /api/payos-webhook          # Health check webhook
 ```
 
@@ -112,7 +112,12 @@ GET  /api/payos-webhook          # Health check webhook
 
 ```
 POST /api/auth/register                 # Đăng ký
+POST /api/auth/register/verify          # Xác minh Email OTP, tạo user
+POST /api/auth/register/resend          # Gửi lại Email OTP
+POST /api/auth/register/cancel          # Hủy đăng ký chờ và revoke OTP
 POST /api/auth/login                    # Đăng nhập
+GET  /api/auth/me                       # Lấy hồ sơ
+PUT  /api/auth/me                       # Cập nhật số điện thoại
 GET  /api/auth/me/bank                  # Lấy TK ngân hàng nhận hoàn tiền
 PUT  /api/auth/me/bank                  # Cập nhật TK ngân hàng
 
@@ -136,8 +141,10 @@ POST /api/orders/:orderCode/cancel      # Hủy đơn (khóa 409 ở pha CONFIRM
 POST   /api/admin/events                          # Tạo sự kiện
 PUT    /api/admin/events/:eventId                 # Cập nhật sự kiện
 DELETE /api/admin/events/:eventId                 # Xóa sự kiện
+GET    /api/admin/tickets                         # Toàn bộ vé/order cho admin
 GET    /api/admin/refunds                         # Danh sách đơn chờ/đã hoàn tiền
 POST   /api/admin/orders/:orderCode/confirm-refund # Xác nhận hoàn tiền VietQR
+POST   /api/admin/orders/:orderCode/refund-bank-error # Báo sai TK hoàn tiền
 ```
 
 ### Internal Endpoints (Webhook)

@@ -7,18 +7,17 @@ Base URL: `http://localhost:3000/api/events`
 ## 1. Lấy danh sách sự kiện
 
 ### Endpoint
-```
+```http
 GET /api/events
 ```
 
-### Authentication
-❌ Không yêu cầu - Public endpoint
+### Authentication / Headers
+Public endpoint. Không yêu cầu header đặc biệt.
 
-### Query Parameters
-Không có
+### Path / Query Parameters
+Không có. Không có body.
 
 ### Response Success (200)
-
 ```json
 {
   "success": true,
@@ -27,354 +26,139 @@ Không có
   "data": [
     {
       "id": "550e8400-e29b-41d4-a716-446655440000",
-      "title": "Concert Rock Festival 2024",
-      "description": "Đêm nhạc rock hoành tráng nhất năm",
-      "location": "SVĐ Mỹ Đình, Hà Nội",
-      "start_time": "2024-12-31T19:00:00.000Z",
+      "title": "Concert 2026",
+      "description": "Mo ta su kien",
+      "location": "Ha Noi",
+      "start_time": "2026-12-31T12:00:00.000Z",
       "event_type": "SEAT_BASED",
-      "created_at": "2024-01-01T00:00:00.000Z",
-      "category": "Âm nhạc",
-      "city": "Hà Nội"
-    },
-    {
-      "id": "660e8400-e29b-41d4-a716-446655440001",
-      "title": "Festival Music 2024",
-      "description": "Lễ hội âm nhạc đa thể loại",
-      "location": "Công viên Thống Nhất",
-      "start_time": "2024-12-25T18:00:00.000Z",
-      "event_type": "ZONE_BASED",
-      "created_at": "2024-01-02T00:00:00.000Z",
-      "category": null,
-      "city": null
+      "created_at": "2026-11-23T00:00:00.000Z",
+      "thumbnails": [],
+      "category": "Am nhac",
+      "city": "Ha Noi",
+      "time": "19:00",
+      "min_price": "200000",
+      "max_price": "500000",
+      "image": null,
+      "banner": null,
+      "organizer": "ABC",
+      "highlights": null,
+      "rules": null
     }
   ]
 }
 ```
 
-#### Response Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| success | boolean | Trạng thái thành công |
-| statusCode | number | HTTP status code |
-| message | string | Thông báo kết quả |
-| data | array | Danh sách sự kiện |
-| data[].id | uuid | ID sự kiện |
-| data[].title | string | Tên sự kiện |
-| data[].description | string | Mô tả |
-| data[].location | string | Địa điểm |
-| data[].start_time | datetime | Thời gian bắt đầu (ISO 8601) |
-| data[].event_type | enum | SEAT_BASED hoặc ZONE_BASED |
-| data[].created_at | datetime | Thời gian tạo |
-| data[].category | string \| null | Tên danh mục sự kiện |
-| data[].city | string \| null | Tên thành phố |
-
-#### Event Types
-
-| Type | Description |
-|------|-------------|
-| SEAT_BASED | Đặt vé theo ghế cụ thể (A1, A2, B1...) |
-| ZONE_BASED | Đặt vé theo khu vực (VIP, REGULAR...) |
+`category` và `city` là **tên** lấy qua JOIN, không phải UUID trong response.
 
 ### Response Error (500)
-
 ```json
 {
   "success": false,
   "statusCode": 500,
-  "data": null,
-  "message": "Database connection error"
+  "message": "Database error",
+  "data": null
 }
-```
-
-### cURL Example
-
-```bash
-curl -X GET http://localhost:3000/api/events
 ```
 
 ---
 
-## 2. Lấy chi tiết sự kiện
+## 2. Lấy ghế hoặc zone của sự kiện
 
 ### Endpoint
-```
-GET /api/events/:eventId
+```http
+GET /api/events/:eventId/details
 ```
 
-### Authentication
-❌ Không yêu cầu - Public endpoint
+> Route thực tế có hậu tố `/details`.
+
+### Authentication / Headers
+Public endpoint. Không yêu cầu header đặc biệt.
 
 ### Path Parameters
-
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| eventId | uuid | ✅ | ID sự kiện |
+|---|---|---:|---|
+| `eventId` | uuid | ✅ | ID trong bảng `events` |
 
 ### Query Parameters
+| Field | Type | Required | Values | Behavior |
+|---|---|---:|---|---|
+| `type` | string | ❌ | `ZONE_BASED`, `SEAT_BASED` | Chỉ đúng `ZONE_BASED` mới trả zone; thiếu hoặc giá trị khác trả danh sách ghế |
 
-| Field | Type | Required | Description | Values |
-|-------|------|----------|-------------|--------|
-| type | string | ❌ | Loại sự kiện | SEAT_BASED, ZONE_BASED |
+### Request Body
+Không có.
 
-### Response Success - SEAT_BASED (200)
-
-**Request:**
-```
-GET /api/events/550e8400-e29b-41d4-a716-446655440000?type=SEAT_BASED
-```
-
-**Response:**
+### Response Success — SEAT_BASED (200)
 ```json
 {
   "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
   "data": [
     {
       "id": "770e8400-e29b-41d4-a716-446655440010",
       "event_id": "550e8400-e29b-41d4-a716-446655440000",
       "seat_number": "A1",
-      "zone_name": "VIP",
-      "price": "500000",
+      "zone_name": "STANDARD",
+      "price": "200000",
       "status": "AVAILABLE",
       "reserved_by": null,
       "reserved_until": null,
-      "current_order_id": null
-    },
-    {
-      "id": "770e8400-e29b-41d4-a716-446655440011",
-      "event_id": "550e8400-e29b-41d4-a716-446655440000",
-      "seat_number": "A2",
-      "zone_name": "VIP",
-      "price": "500000",
-      "status": "RESERVED",
-      "reserved_by": "880e8400-e29b-41d4-a716-446655440020",
-      "reserved_until": "2024-10-18T12:30:30.000Z",
-      "current_order_id": null
-    },
-    {
-      "id": "770e8400-e29b-41d4-a716-446655440012",
-      "event_id": "550e8400-e29b-41d4-a716-446655440000",
-      "seat_number": "A3",
-      "zone_name": "VIP",
-      "price": "500000",
-      "status": "SOLD",
-      "reserved_by": null,
-      "reserved_until": null,
-      "current_order_id": "990e8400-e29b-41d4-a716-446655440030"
-    },
-    {
-      "id": "770e8400-e29b-41d4-a716-446655440013",
-      "event_id": "550e8400-e29b-41d4-a716-446655440000",
-      "seat_number": "B1",
-      "zone_name": "REGULAR",
-      "price": "200000",
-      "status": "PAYMENT_PROCESSING",
-      "reserved_by": "880e8400-e29b-41d4-a716-446655440021",
-      "reserved_until": "2024-10-18T12:35:00.000Z",
-      "current_order_id": "990e8400-e29b-41d4-a716-446655440031"
+      "current_order_code": null
     }
   ]
 }
 ```
 
-#### Seat Status Values
-
-| Status | Description | Can Book? |
-|--------|-------------|-----------|
-| AVAILABLE | Ghế trống, sẵn sàng | ✅ Có |
-| RESERVED | Đang được giữ chỗ (30s) | ❌ Không |
-| PAYMENT_PROCESSING | Đang chờ thanh toán (5 phút) | ❌ Không |
-| SOLD | Đã bán | ❌ Không |
-
-### Response Success - ZONE_BASED (200)
-
-**Request:**
-```
-GET /api/events/660e8400-e29b-41d4-a716-446655440001?type=ZONE_BASED
-```
-
-**Response:**
+### Response Success — ZONE_BASED (200)
 ```json
 {
   "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
   "data": [
     {
       "zone_name": "VIP",
       "price": "500000",
       "available_count": "25",
       "total_count": "50"
-    },
-    {
-      "zone_name": "REGULAR",
-      "price": "200000",
-      "available_count": "150",
-      "total_count": "200"
-    },
-    {
-      "zone_name": "STANDARD",
-      "price": "100000",
-      "available_count": "300",
-      "total_count": "500"
     }
   ]
 }
 ```
 
-#### Zone Response Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| zone_name | string | Tên khu vực |
-| price | string | Giá vé (VNĐ) |
-| available_count | string | Số vé còn lại |
-| total_count | string | Tổng số vé khu vực |
+Nếu event/ghế/zone không tồn tại, repository hiện trả mảng rỗng với HTTP `200`.
 
 ### Response Error (500)
+Lỗi UUID/DB được controller hiện tại trả `500`:
 
 ```json
 {
   "success": false,
-  "message": "Invalid event ID format"
-}
-```
-
-### cURL Examples
-
-```bash
-# Lấy danh sách ghế cụ thể
-curl -X GET "http://localhost:3000/api/events/550e8400-e29b-41d4-a716-446655440000?type=SEAT_BASED"
-
-# Lấy thông tin theo khu vực
-curl -X GET "http://localhost:3000/api/events/660e8400-e29b-41d4-a716-446655440001?type=ZONE_BASED"
-```
-
----
-
-## Business Logic
-
-### Ghế hết hạn tự động giải phóng
-- **Background Job**: Chạy mỗi 60 giây
-- **Logic**: `UPDATE seats SET status = 'AVAILABLE' WHERE reserved_until < NOW()`
-- **Trước khi trả response**: Luôn giải phóng ghế hết hạn
-
-### Real-time Updates
-⚠️ **Chưa implement** - Khuyến nghị:
-- WebSocket hoặc Server-Sent Events
-- Push notification khi ghế thay đổi status
-
-### Caching
-⚠️ **Chưa implement** - Khuyến nghị:
-- Cache danh sách events (TTL: 5 phút)
-- Cache zone counts (TTL: 10 giây)
-- Invalidate cache khi có booking mới
-
----
-
-## Use Cases
-
-### Case 1: Hiển thị danh sách sự kiện trên homepage
-```
-1. Frontend gọi GET /api/events
-2. Nhận danh sách events
-3. Render cards với title, location, start_time
-```
-
-### Case 2: Xem sơ đồ ghế (SEAT_BASED)
-```
-1. User click vào event
-2. Frontend gọi GET /api/events/{eventId}?type=SEAT_BASED
-3. Nhận danh sách tất cả ghế
-4. Render sơ đồ ghế với màu sắc theo status:
-   - AVAILABLE: Xanh lá
-   - RESERVED: Vàng
-   - PAYMENT_PROCESSING: Cam
-   - SOLD: Xám
-```
-
-### Case 3: Chọn số lượng vé theo zone (ZONE_BASED)
-```
-1. User click vào event
-2. Frontend gọi GET /api/events/{eventId}?type=ZONE_BASED
-3. Nhận thông tin zones
-4. Hiển thị dropdown/input cho mỗi zone:
-   "VIP (500,000đ) - Còn 25/50 vé"
-```
-
----
-
-## Data Types & Constraints
-
-### Event
-
-| Field | Type | Constraints |
-|-------|------|-------------|
-| id | uuid | Primary Key, Auto-generated |
-| title | varchar(255) | NOT NULL |
-| description | text | NULL |
-| location | varchar(255) | NOT NULL |
-| start_time | timestamp | NOT NULL, >= NOW() |
-| event_type | enum | 'SEAT_BASED', 'ZONE_BASED' |
-| created_at | timestamp | Default: NOW() |
-
-### Seat
-
-| Field | Type | Constraints |
-|-------|------|-------------|
-| id | uuid | Primary Key, Auto-generated |
-| event_id | uuid | Foreign Key → events(id), ON DELETE CASCADE |
-| seat_number | varchar(50) | NOT NULL |
-| zone_name | varchar(100) | NOT NULL |
-| price | decimal(10,0) | NOT NULL, >= 0 |
-| status | enum | 'AVAILABLE', 'RESERVED', 'PAYMENT_PROCESSING', 'SOLD' |
-| reserved_by | uuid | NULL, Foreign Key → users(id) |
-| reserved_until | timestamp | NULL |
-| current_order_id | uuid | NULL, Foreign Key → orders(id) |
-
-### Indexes
-
-```sql
-CREATE INDEX idx_seats_event_id ON seats(event_id);
-CREATE INDEX idx_seats_status ON seats(status);
-CREATE INDEX idx_seats_reserved_until ON seats(reserved_until);
-CREATE INDEX idx_seats_zone_name ON seats(zone_name);
-```
-
----
-
-## Testing
-
-### Test Data - SEAT_BASED Event
-```json
-{
-  "title": "Concert Test Event",
-  "description": "Test event for SEAT_BASED",
-  "location": "Test Venue",
-  "start_time": "2024-12-31T19:00:00Z",
-  "event_type": "SEAT_BASED",
-  "seatConfig": {
-    "totalSeats": 12,
-    "price": 100000,
-    "prefix": "T"
-  }
-}
-```
-
-### Test Data - ZONE_BASED Event
-```json
-{
-  "title": "Festival Test Event",
-  "description": "Test event for ZONE_BASED",
-  "location": "Test Park",
-  "start_time": "2024-12-25T18:00:00Z",
-  "event_type": "ZONE_BASED",
-  "zoneConfigs": [
-    {"zoneName": "VIP", "count": 10, "price": 500000},
-    {"zoneName": "REGULAR", "count": 20, "price": 200000}
-  ]
+  "statusCode": 500,
+  "message": "invalid input syntax for type uuid",
+  "data": null
 }
 ```
 
 ---
 
-**📅 Last Updated:** 2024-10-18  
-**📖 Version:** 1.2
+## Giá trị trạng thái
+
+### Event type
+- `SEAT_BASED`: chọn ghế cụ thể.
+- `ZONE_BASED`: chọn số lượng theo khu vực.
+
+### Seat status
+- `AVAILABLE`: có thể giữ.
+- `RESERVED`: đang giữ 30 giây.
+- `PAYMENT_PROCESSING`: đang thanh toán.
+- `SOLD`: đã bán.
+
+### Schema liên quan
+- `events.category` → `categories.id`; API trả `category_name` dưới field `category`.
+- `events.city` → `cities.id`; API trả `city_name` dưới field `city`.
+- `seats.current_order_code` → `orders.order_code` (bigint), không phải UUID/order id.
+
+**Last Updated:** 2026-11-23
+
+**Version:** Current backend contract

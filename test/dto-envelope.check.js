@@ -47,9 +47,10 @@ assert.strictEqual(loginWireWithTime.data.serverTime, explicitTime);
 
 // 2. RegisterResponseDTO
 const regWire = sendThroughMiddleware(new RegisterResponseDTO({
-  id: 'u-2', email: 'c@d.com', full_name: 'C', role: 'CUSTOMER',
-}));
-assert.strictEqual(regWire.data.id, 'u-2');
+  registrationId: '550e8400-e29b-41d4-a716-446655440000', expiresIn: 300, resendAfter: 60,
+}), 202);
+assert.strictEqual(regWire.statusCode, 202);
+assert.strictEqual(regWire.data.expiresIn, 300);
 
 // 3. Seat DTOs đặt code/unavailableSeats vào data ngay từ DTO
 const holdWire = sendThroughMiddleware(new SeatHoldSuccessResponseDTO({
