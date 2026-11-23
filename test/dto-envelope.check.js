@@ -32,6 +32,18 @@ const loginWire = sendThroughMiddleware(new LoginResponseDTO('tok_123', {
 assert.deepStrictEqual(Object.keys(loginWire), ['success', 'statusCode', 'message', 'data']);
 assert.strictEqual(loginWire.data.token, 'tok_123');
 assert.strictEqual(loginWire.data.user.email, 'a@b.com');
+assert.strictEqual(typeof loginWire.data.serverTime, 'string');
+assert.ok(Number.isFinite(Date.parse(loginWire.data.serverTime)));
+
+const explicitTime = '2026-11-23T14:00:00.000Z';
+const loginWireWithTime = sendThroughMiddleware(
+  new LoginResponseDTO(
+    'tok_123',
+    { id: 'u-1', email: 'a@b.com', full_name: 'Nguyen A', role: 'ADMIN' },
+    explicitTime
+  )
+);
+assert.strictEqual(loginWireWithTime.data.serverTime, explicitTime);
 
 // 2. RegisterResponseDTO
 const regWire = sendThroughMiddleware(new RegisterResponseDTO({

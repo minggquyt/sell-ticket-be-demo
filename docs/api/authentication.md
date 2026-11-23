@@ -177,8 +177,10 @@ Content-Type: application/json
       "id": "550e8400-e29b-41d4-a716-446655440000",
       "email": "user@example.com",
       "role": "CUSTOMER",
-      "fullName": "Nguyen Van A"
-    }
+      "fullName": "Nguyen Van A",
+      "phone": "0901234567"
+    },
+    "serverTime": "2026-11-23T14:00:00.000Z"
   }
 }
 ```
@@ -190,11 +192,13 @@ Content-Type: application/json
 | success | boolean | Trạng thái thành công |
 | statusCode | number | HTTP status code |
 | message | string | Thông báo |
-| data.token | string | JWT token (expires in 1 day) |
+| data.token | string | JWT token (mặc định hết hạn sau 1 ngày, cấu hình qua `JWT_EXPIRES_IN`) |
 | data.user.id | uuid | ID người dùng |
 | data.user.email | string | Email |
 | data.user.role | enum | CUSTOMER hoặc ADMIN |
 | data.user.fullName | string | Tên đầy đủ |
+| data.user.phone | string \| null | Số điện thoại |
+| data.serverTime | string (ISO 8601) | Thời điểm hiện tại theo đồng hồ server (dùng để bù clock skew ở client) |
 
 #### JWT Token Structure
 
@@ -210,7 +214,7 @@ Content-Type: application/json
 ```
 
 - **Algorithm**: HS256
-- **Expiration**: 1 day (86400 seconds)
+- **Expiration**: Mặc định `1d` (86400 seconds), có thể override qua biến môi trường `JWT_EXPIRES_IN` trong `.env`
 - **Secret**: Từ `JWT_SECRET` trong .env
 
 ### Response Error Cases
@@ -291,14 +295,18 @@ curl -X GET http://localhost:3000/api/orders/my-orders \
 
 ## Error Codes
 
-| Code | Message | Meaning |
-|------|---------|---------|
-| 400 | Vui lòng nhập đủ email và mật khẩu | Missing required fields |
-| 400 | Email không đúng định dạng | Invalid email format |
-| 400 | Mật khẩu phải có ít nhất 6 ký tự | Password too short |
-| 400 | Email này đã được sử dụng | Email already exists |
-| 400 | Email hoặc mật khẩu không đúng | Invalid credentials |
-| 500 | Internal server error | Server error |
+| HTTP Status | `data.code` | Message | Meaning |
+|-------------|-------------|---------|---------|
+| 400 | — | Vui lòng nhập đủ email và mật khẩu | Missing required fields |
+| 400 | — | Email không đúng định dạng | Invalid email format |
+| 400 | — | Mật khẩu phải có ít nhất 6 ký tự | Password too short |
+| 400 | — | Email này đã được sử dụng | Email already exists |
+| 400 | — | Email hoặc mật khẩu không đúng | Invalid credentials |
+| 401 | `AUTH_REQUIRED` | Bạn chưa đăng nhập. | Thiếu header `Authorization: Bearer ...` hoặc token rỗng |
+| 401 | `TOKEN_EXPIRED` | Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại. | JWT đã hết hạn (`TokenExpiredError`) |
+| 401 | `TOKEN_INVALID` | Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại. | JWT sai chữ ký hoặc cấu trúc không hợp lệ |
+| 403 | `FORBIDDEN` | Bạn không có quyền thực hiện thao tác này. / Yêu cầu quyền Quản trị viên (Admin). | Tài khoản hợp lệ nhưng sai vai trò (`authorizeRoles` / `requireAdmin`) |
+| 500 | — | Internal server error | Server error |
 
 ---
 

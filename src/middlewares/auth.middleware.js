@@ -3,10 +3,17 @@ const { JWT_SECRET } = require('../config/constants');
 
 function verifyToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  const token =
+    typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
 
   if (!token) {
-    return res.status(401).json({ success: false, message: 'Bạn chưa đăng nhập.' });
+    return res.status(401).json({
+      success: false,
+      message: 'Bạn chưa đăng nhập.',
+      data: { code: 'AUTH_REQUIRED' },
+    });
   }
 
   try {
@@ -14,7 +21,14 @@ function verifyToken(req, res, next) {
     req.user = decoded;
     next();
   } catch (err) {
-    return res.status(403).json({ success: false, message: 'Token không hợp lệ hoặc đã hết hạn.' });
+    const isExpired = err?.name === 'TokenExpiredError';
+    return res.status(401).json({
+      success: false,
+      message: isExpired
+        ? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
+        : 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.',
+      data: { code: isExpired ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID' },
+    });
   }
 }
 
@@ -23,7 +37,8 @@ function authorizeRoles(...allowedRoles) {
     if (!req.user || !allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: 'Bạn không có quyền thực hiện thao tác này.'
+        message: 'Bạn không có quyền thực hiện thao tác này.',
+        data: { code: 'FORBIDDEN' },
       });
     }
     next();
@@ -34,7 +49,11 @@ function requireAdmin(req, res, next) {
   if (req.user && req.user.role === 'ADMIN') {
     next();
   } else {
-    return res.status(403).json({ success: false, message: 'Yêu cầu quyền Quản trị viên (Admin).' });
+    return res.status(403).json({
+      success: false,
+      message: 'Yêu cầu quyền Quản trị viên (Admin).',
+      data: { code: 'FORBIDDEN' },
+    });
   }
 }
 

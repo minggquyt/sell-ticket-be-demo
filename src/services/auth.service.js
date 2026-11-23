@@ -65,6 +65,7 @@ class AuthService {
         fullName: user.full_name,
         phone: user.phone,
       },
+      serverTime: new Date().toISOString(),
     };
   }
 
