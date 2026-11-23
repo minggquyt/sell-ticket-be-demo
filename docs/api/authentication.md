@@ -308,6 +308,8 @@ curl -X GET http://localhost:3000/api/orders/my-orders \
 | 403 | `FORBIDDEN` | Bạn không có quyền thực hiện thao tác này. / Yêu cầu quyền Quản trị viên (Admin). | Tài khoản hợp lệ nhưng sai vai trò (`authorizeRoles` / `requireAdmin`) |
 | 500 | — | Internal server error | Server error |
 
+> Chi tiết hợp đồng `401`/`403`, `data.serverTime` và hướng dẫn test `JWT_EXPIRES_IN` xem tại [docs/auth/AUTO_LOGOUT_EXPIRED_TOKEN.md](../auth/AUTO_LOGOUT_EXPIRED_TOKEN.md).
+
 ---
 
 ## Testing
@@ -358,5 +360,5 @@ curl -X GET http://localhost:3000/api/orders/my-orders \
 
 ---
 
-**📅 Last Updated:** 2024-10-18  
-**📖 Version:** 1.2
+**📅 Last Updated:** 2026-11-23  
+**📖 Version:** 1.3
