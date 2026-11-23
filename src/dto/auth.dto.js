@@ -89,6 +89,45 @@ class LoginRequestDTO {
   }
 }
 
+class VerifyRegistrationRequestDTO {
+  constructor(body = {}) {
+    this.registrationId = String(body.registrationId ?? '').trim();
+    this.otp = typeof body.otp === 'string' ? body.otp.trim() : '';
+  }
+
+  validate() {
+    const errors = [];
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(this.registrationId)) {
+      errors.push('registrationId không hợp lệ.');
+    }
+    if (!/^\d{6}$/.test(this.otp)) {
+      errors.push('OTP phải gồm đúng 6 chữ số.');
+    }
+    return { isValid: errors.length === 0, errors };
+  }
+
+  toServiceInput() {
+    return { registrationId: this.registrationId, otp: this.otp };
+  }
+}
+
+class ResendRegistrationOtpRequestDTO {
+  constructor(body = {}) {
+    this.registrationId = String(body.registrationId ?? '').trim();
+  }
+
+  validate() {
+    const isValid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(this.registrationId);
+    return { isValid, errors: isValid ? [] : ['registrationId không hợp lệ.'] };
+  }
+
+  toServiceInput() {
+    return { registrationId: this.registrationId };
+  }
+}
+
+class CancelRegistrationRequestDTO extends ResendRegistrationOtpRequestDTO {}
+
 class UpdateProfileRequestDTO {
   constructor(body = {}) {
     this.phone = String(body.phone ?? '').trim();
@@ -219,10 +258,10 @@ class UserResponseDTO {
 }
 
 class RegisterResponseDTO {
-  constructor(user) {
+  constructor(result) {
     this.success = true;
-    this.message = 'Đăng ký tài khoản thành công!';
-    this.data = new UserResponseDTO(user).toJSON();
+    this.message = 'Mã OTP đã được gửi đến email của bạn.';
+    this.data = result;
   }
 
   toJSON() {
@@ -255,15 +294,17 @@ class LoginResponseDTO {
 }
 
 class ErrorResponseDTO {
-  constructor(message) {
+  constructor(message, code = null, details = null) {
     this.success = false;
     this.message = message;
+    this.data = code ? { code, ...(details || {}) } : null;
   }
 
   toJSON() {
     return {
       success: this.success,
-      message: this.message
+      message: this.message,
+      data: this.data
     };
   }
 }
@@ -272,6 +313,9 @@ module.exports = {
   // Request DTOs
   RegisterRequestDTO,
   LoginRequestDTO,
+  VerifyRegistrationRequestDTO,
+  ResendRegistrationOtpRequestDTO,
+  CancelRegistrationRequestDTO,
   UpdateProfileRequestDTO,
   UpdateBankRequestDTO,
   toBankAccountName,

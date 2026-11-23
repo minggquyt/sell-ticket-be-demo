@@ -2,644 +2,396 @@
 
 Base URL: `http://localhost:3000/api/seats`
 
----
+Tất cả endpoint trong file này yêu cầu:
 
-## 1. Giữ ghế (Request Hold)
-
-### Endpoint
-```
-POST /api/seats/request-hold
-```
-
-### Authentication
-✅ Required - JWT token in header
-
-### Headers
 ```http
-Content-Type: application/json
 Authorization: Bearer <token>
 ```
 
-### Request Body
+Endpoint có body JSON yêu cầu thêm `Content-Type: application/json`.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| seatIds | array[uuid] | ✅ | Danh sách ID ghế muốn giữ |
+---
 
-### Validation Rules
+## 1. Lấy phiên giữ vé/thanh toán đang hoạt động
 
-#### seatIds
-- **Type**: Array of UUID strings
-- **Required**: Có
-- **Not Empty**: Phải có ít nhất 1 phần tử
-- **Max Length**: 4 phần tử (MAX_TICKETS_PER_USER)
-- **Format**: Mỗi phần tử phải là UUID hợp lệ
-
-### Business Rules
-
-1. **One Active Hold Per User**: User chỉ được giữ 1 phiên tại 1 thời điểm
-2. **Hold Duration**: 30 giây (SEAT_HOLD_DURATION_SECONDS)
-3. **Auto Release**: Sau 30s tự động giải phóng nếu không thanh toán
-4. **Concurrency**: Sử dụng `FOR UPDATE SKIP LOCKED` để xử lý đồng thời
-
-### Request Example
-
-```json
-{
-  "seatIds": [
-    "770e8400-e29b-41d4-a716-446655440010",
-    "770e8400-e29b-41d4-a716-446655440011",
-    "770e8400-e29b-41d4-a716-446655440012"
-  ]
-}
+### Endpoint
+```http
+GET /api/seats/my-active-session
 ```
 
-### Response Case 1: Full Reserved (200)
+### Headers
+```http
+Authorization: Bearer <token>
+```
 
-**Scenario**: Tất cả ghế đều available, giữ thành công 100%
+### Path / Query Parameters
+Không có. Không có body.
 
+### Response Success — không có phiên (200)
 ```json
 {
   "success": true,
-  "code": "FULLY_RESERVED",
+  "statusCode": 200,
+  "message": "Thành công.",
+  "data": null
+}
+```
+
+### Response Success — đang giữ ghế (200)
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
+  "data": {
+    "step": "RESERVED",
+    "eventId": "event-uuid",
+    "eventTitle": "Concert 2026",
+    "eventType": "SEAT_BASED",
+    "orderCode": null,
+    "checkoutUrl": null,
+    "totalAmount": 400000,
+    "reservedUntil": "2026-11-23T14:00:30.000Z",
+    "serverTime": "2026-11-23T14:00:00.000Z",
+    "seats": [
+      { "id": "seat-uuid", "seat_number": "A1", "zone_name": "STANDARD", "price": 200000 }
+    ]
+  }
+}
+```
+
+### Response Success — đang thanh toán (200)
+`step` là `PAYMENT_PROCESSING`; response có thêm `expiresAt`, `confirmUntil`, `phase` (`WAITING` hoặc `CONFIRMING`) và `orderCode`.
+
+### Response Errors
+- `401`: `AUTH_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_INVALID`.
+- `500`: không thể tải/đối soát session.
+
+---
+
+## 2. Giữ ghế cụ thể
+
+### Endpoint
+```http
+POST /api/seats/reserve
+```
+
+### Authorization
+Ngoài JWT, role phải là `CUSTOMER`; role khác nhận `403 FORBIDDEN`.
+
+### Headers
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Path / Query Parameters
+Không có.
+
+### Request Body
+| Field | Type | Required | Validation |
+|---|---|---:|---|
+| `seatIds` | array | ✅ | 1–4 phần tử; DTO không tự kiểm tra UUID từng phần tử |
+
+```json
+{ "seatIds": ["seat-uuid-1", "seat-uuid-2"] }
+```
+
+### Response — giữ đủ (200)
+```json
+{
+  "success": true,
+  "statusCode": 200,
   "message": "Đã giữ chỗ thành công.",
   "data": {
-    "seatIds": [
-      "770e8400-e29b-41d4-a716-446655440010",
-      "770e8400-e29b-41d4-a716-446655440011",
-      "770e8400-e29b-41d4-a716-446655440012"
-    ],
-    "reserved_until": "2024-10-18T12:30:30.000Z",
+    "code": "FULLY_RESERVED",
+    "seatIds": ["seat-uuid-1", "seat-uuid-2"],
+    "reserved_until": "2026-11-23T14:00:30.000Z",
+    "serverTime": "2026-11-23T14:00:00.000Z",
     "seats": [
       {
-        "id": "770e8400-e29b-41d4-a716-446655440010",
+        "id": "seat-uuid-1",
         "seat_number": "A1",
         "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:30:30.000Z"
-      },
-      {
-        "id": "770e8400-e29b-41d4-a716-446655440011",
-        "seat_number": "A2",
-        "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:30:30.000Z"
-      },
-      {
-        "id": "770e8400-e29b-41d4-a716-446655440012",
-        "seat_number": "A3",
-        "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:30:30.000Z"
+        "reserved_until": "2026-11-23T14:00:30.000Z",
+        "zone_name": "STANDARD",
+        "price": "200000"
       }
     ]
   }
 }
 ```
 
-#### Success Response Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| success | boolean | true |
-| code | string | FULLY_RESERVED |
-| message | string | Thông báo |
-| data.seatIds | array[uuid] | Danh sách ID ghế đã giữ |
-| data.reserved_until | datetime | Thời điểm hết hạn giữ chỗ |
-| data.seats | array | Chi tiết từng ghế |
-| data.seats[].id | uuid | ID ghế |
-| data.seats[].seat_number | string | Số ghế |
-| data.seats[].status | string | RESERVED |
-| data.seats[].reserved_until | datetime | Hết hạn |
-
-### Response Case 2: Partial Availability (200)
-
-**Scenario**: Một số ghế đã bị người khác giữ, server trả về ghế còn lại
+### Response — chỉ còn một phần (200)
+Lưu ý HTTP vẫn `200`, nhưng `success=false`.
 
 ```json
 {
   "success": false,
-  "code": "PARTIAL_AVAILABILITY",
+  "statusCode": 200,
   "message": "Một số ghế bạn chọn vừa có người khác giữ.",
-  "unavailableSeats": ["A1", "A2"],
-  "availableSeats": [
-    {
-      "id": "770e8400-e29b-41d4-a716-446655440012",
-      "seat_number": "A3"
-    }
-  ],
-  "availableSeatIds": [
-    "770e8400-e29b-41d4-a716-446655440012"
-  ]
+  "data": {
+    "code": "PARTIAL_AVAILABILITY",
+    "unavailableSeats": ["A1"],
+    "availableSeats": [{ "id": "seat-uuid-2", "seat_number": "A2" }],
+    "availableSeatIds": ["seat-uuid-2"]
+  }
 }
 ```
 
-#### Partial Response Fields
+### Response Errors
+| HTTP | Case |
+|---|---|
+| 400 | DTO invalid; `USER_HAS_ACTIVE_HOLD`; `ALL_SEATS_TAKEN` |
+| 401 | JWT missing/expired/invalid |
+| 403 | User không phải `CUSTOMER` |
+| 500 | Lỗi hệ thống/DB khi giữ ghế |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| success | boolean | false (partial = không giữ được hết) |
-| code | string | PARTIAL_AVAILABILITY |
-| message | string | Thông báo |
-| unavailableSeats | array[string] | Danh sách seat_number không khả dụng |
-| availableSeats | array | Ghế còn lại có thể giữ |
-| availableSeats[].id | uuid | ID ghế |
-| availableSeats[].seat_number | string | Số ghế |
-| availableSeatIds | array[uuid] | ID ghế available (dùng cho confirm-partial) |
-
-**Frontend Flow:**
-1. Nhận response PARTIAL_AVAILABILITY
-2. Hiển thị cho user: "Ghế A1, A2 đã được người khác chọn. Bạn có muốn giữ ghế A3?"
-3. Nếu user đồng ý → Gọi `/api/seats/confirm-partial` với `availableSeatIds`
-
-### Response Case 3: All Seats Taken (400)
-
-**Scenario**: Tất cả ghế đã bị người khác giữ
-
+Lỗi nghiệp vụ có `data.code`, ví dụ:
 ```json
 {
   "success": false,
-  "code": "ALL_SEATS_TAKEN",
-  "message": "Tất cả các ghế bạn chọn đều đã bị người khác giữ."
+  "statusCode": 400,
+  "message": "Bạn đang có một phiên giữ vé chưa hoàn tất.",
+  "data": { "code": "USER_HAS_ACTIVE_HOLD" }
 }
-```
-
-### Response Case 4: User Has Active Hold (400)
-
-**Scenario**: User đang giữ ghế khác, chưa thanh toán hoặc hủy
-
-```json
-{
-  "success": false,
-  "code": "USER_HAS_ACTIVE_HOLD",
-  "message": "Bạn đang có một phiên giữ vé chưa hoàn tất."
-}
-```
-
-**Resolution**: User phải hủy phiên cũ (release) hoặc đợi hết hạn (30s)
-
-### Response Case 5: Exceeded Max Seats (400)
-
-**Scenario**: Chọn quá 4 ghế
-
-```json
-{
-  "success": false,
-  "code": "EXCEEDED_MAX_SEATS",
-  "message": "Bạn chỉ được chọn tối đa 4 ghế cho mỗi tài khoản."
-}
-```
-
-### Response Case 6: Invalid Request (400)
-
-```json
-{
-  "success": false,
-  "message": "Danh sách seatIds không hợp lệ."
-}
-```
-
-### Response Case 7: Unauthorized (401)
-
-```json
-{
-  "success": false,
-  "message": "Bạn chưa đăng nhập."
-}
-```
-
-### cURL Example
-
-```bash
-curl -X POST http://localhost:3000/api/seats/request-hold \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
-  -d '{
-    "seatIds": [
-      "770e8400-e29b-41d4-a716-446655440010",
-      "770e8400-e29b-41d4-a716-446655440011"
-    ]
-  }'
 ```
 
 ---
 
-## 2. Xác nhận giữ ghế một phần (Confirm Partial)
+## 3. Xác nhận giữ phần ghế còn lại
 
 ### Endpoint
+```http
+POST /api/seats/confirm-partial-hold
 ```
-POST /api/seats/confirm-partial
-```
-
-### Authentication
-✅ Required
 
 ### Headers
 ```http
-Content-Type: application/json
 Authorization: Bearer <token>
+Content-Type: application/json
 ```
 
-### Use Case
-Sau khi nhận response `PARTIAL_AVAILABILITY` từ `request-hold`, user quyết định giữ các ghế còn lại.
+### Path / Query Parameters
+Không có.
 
 ### Request Body
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| confirmSeatIds | array[uuid] | ✅ | Danh sách ID ghế từ availableSeatIds |
-
-### Request Example
+| Field | Type | Required | Validation |
+|---|---|---:|---|
+| `confirmSeatIds` | array | ✅ | Mảng không rỗng |
 
 ```json
-{
-  "confirmSeatIds": [
-    "770e8400-e29b-41d4-a716-446655440012"
-  ]
-}
+{ "confirmSeatIds": ["seat-uuid-2"] }
 ```
 
 ### Response Success (200)
+Cùng shape với giữ đủ, `data.code = PARTIAL_RESERVED_SUCCESS`.
 
-```json
-{
-  "success": true,
-  "code": "PARTIAL_RESERVED_SUCCESS",
-  "message": "Đã xác nhận giữ các ghế còn lại thành công.",
-  "data": {
-    "seatIds": [
-      "770e8400-e29b-41d4-a716-446655440012"
-    ],
-    "reserved_until": "2024-10-18T12:31:00.000Z",
-    "seats": [
-      {
-        "id": "770e8400-e29b-41d4-a716-446655440012",
-        "seat_number": "A3",
-        "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:31:00.000Z"
-      }
-    ]
-  }
-}
-```
-
-### Response Error Case 1: Ghế đã bị giữ (400)
-
-**Scenario**: Trong lúc user suy nghĩ, ghế còn lại cũng bị người khác chọn
-
-```json
-{
-  "success": false,
-  "code": "PARTIAL_HOLD_EXPIRED",
-  "message": "Rất tiếc! Trong lúc bạn suy nghĩ, các ghế còn lại cũng đã được người khác giữ mất."
-}
-```
-
-### Response Error Case 2: User Has Active Hold (400)
-
-```json
-{
-  "success": false,
-  "code": "USER_HAS_ACTIVE_HOLD",
-  "message": "Bạn đang có một phiên giữ vé chưa hoàn tất."
-}
-```
-
-### cURL Example
-
-```bash
-curl -X POST http://localhost:3000/api/seats/confirm-partial \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{
-    "confirmSeatIds": ["770e8400-e29b-41d4-a716-446655440012"]
-  }'
-```
+### Response Errors
+- `400`: body invalid, `USER_HAS_ACTIVE_HOLD`, `PARTIAL_HOLD_EXPIRED`.
+- `401`: lỗi JWT.
+- `500`: lỗi hệ thống.
 
 ---
 
-## 3. Giữ vé theo khu vực (Reserve Zone)
+## 4. Giữ vé theo zone
 
 ### Endpoint
-```
+```http
 POST /api/seats/reserve-zone
 ```
 
-### Authentication
-✅ Required
-
 ### Headers
 ```http
-Content-Type: application/json
 Authorization: Bearer <token>
+Content-Type: application/json
 ```
 
+### Path / Query Parameters
+Không có.
+
 ### Request Body
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| eventId | uuid | ✅ | ID sự kiện |
-| zones | array | ✅ | Danh sách khu vực và số lượng |
-| zones[].zoneName | string | ✅ | Tên khu vực (uppercase) |
-| zones[].quantity | number | ✅ | Số lượng vé |
-
-### Validation Rules
-
-#### zones
-- **Type**: Array
-- **Required**: Có
-- **Not Empty**: Ít nhất 1 zone
-- **Total Quantity**: Tổng quantity của tất cả zones <= 4
-
-#### zones[].zoneName
-- **Type**: String
-- **Required**: Có
-- **Format**: Uppercase (VIP, REGULAR, STANDARD)
-
-#### zones[].quantity
-- **Type**: Number
-- **Required**: Có
-- **Min**: 1
-- **Example**: 2
-
-### Request Example
+| Field | Type | Required | Validation |
+|---|---|---:|---|
+| `eventId` | uuid | ✅ | Event cần giữ vé |
+| `zones` | array | ✅ | Không rỗng; tổng quantity tối đa 4 |
+| `zones[].zoneName` hoặc `zone_name` | string | ✅ | Tên zone |
+| `zones[].quantity` | number | ✅ | Lớn hơn 0 |
 
 ```json
 {
-  "eventId": "660e8400-e29b-41d4-a716-446655440001",
+  "eventId": "event-uuid",
   "zones": [
-    {
-      "zoneName": "VIP",
-      "quantity": 2
-    },
-    {
-      "zoneName": "REGULAR",
-      "quantity": 1
-    }
+    { "zoneName": "VIP", "quantity": 2 },
+    { "zoneName": "REGULAR", "quantity": 1 }
   ]
 }
 ```
 
 ### Response Success (200)
-
 ```json
 {
   "success": true,
+  "statusCode": 200,
   "message": "Đã giữ thành công tổng cộng 3 vé!",
   "data": {
     "seats": [
       {
-        "id": "aa0e8400-e29b-41d4-a716-446655440050",
+        "id": "seat-uuid",
         "seat_number": "VIP-01",
+        "status": "RESERVED",
+        "reserved_until": "2026-11-23T14:00:30.000Z",
         "zone_name": "VIP",
-        "price": "500000",
-        "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:30:30.000Z"
-      },
-      {
-        "id": "aa0e8400-e29b-41d4-a716-446655440051",
-        "seat_number": "VIP-02",
-        "zone_name": "VIP",
-        "price": "500000",
-        "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:30:30.000Z"
-      },
-      {
-        "id": "aa0e8400-e29b-41d4-a716-446655440060",
-        "seat_number": "REGULAR-15",
-        "zone_name": "REGULAR",
-        "price": "200000",
-        "status": "RESERVED",
-        "reserved_until": "2024-10-18T12:30:30.000Z"
+        "price": "500000"
       }
     ],
-    "seatIds": [
-      "aa0e8400-e29b-41d4-a716-446655440050",
-      "aa0e8400-e29b-41d4-a716-446655440051",
-      "aa0e8400-e29b-41d4-a716-446655440060"
-    ],
-    "reserved_until": "2024-10-18T12:30:30.000Z",
+    "seatIds": ["seat-uuid"],
+    "reserved_until": "2026-11-23T14:00:30.000Z",
+    "serverTime": "2026-11-23T14:00:00.000Z",
     "totalTickets": 3
   }
 }
 ```
 
-### Response Error Case 1: Không đủ vé (400)
-
-```json
-{
-  "success": false,
-  "message": "Số lượng vé khả dụng không đủ hoặc bạn đang có một phiên giữ vé chưa hoàn tất."
-}
-```
-
-### Response Error Case 2: Vượt quá giới hạn (400)
-
-```json
-{
-  "success": false,
-  "message": "Tổng số vé các khu vực cộng lại không được vượt quá 4 vé."
-}
-```
-
-**Example**: VIP=2, REGULAR=3 → Total=5 > 4 ❌
-
-### Response Error Case 3: Dữ liệu không hợp lệ (400)
-
-```json
-{
-  "success": false,
-  "message": "Dữ liệu chọn khu vực không hợp lệ."
-}
-```
-
-### cURL Example
-
-```bash
-curl -X POST http://localhost:3000/api/seats/reserve-zone \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{
-    "eventId": "660e8400-e29b-41d4-a716-446655440001",
-    "zones": [
-      {"zoneName": "VIP", "quantity": 2},
-      {"zoneName": "REGULAR", "quantity": 1}
-    ]
-  }'
-```
+### Response Errors
+- `400`: dữ liệu zone invalid, tổng > 4, thiếu inventory hoặc user có active hold.
+- `401`: lỗi JWT.
 
 ---
 
-## 4. Hủy giữ chỗ (Release Seats)
+## 5. Bắt đầu checkout PayOS QR
 
 ### Endpoint
+```http
+POST /api/seats/start-checkout
 ```
-POST /api/seats/release
-```
-
-### Authentication
-✅ Required
 
 ### Headers
 ```http
-Content-Type: application/json
 Authorization: Bearer <token>
+Content-Type: application/json
 ```
 
+### Path / Query Parameters
+Không có.
+
 ### Request Body
-
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| seatIds | array[uuid] | ✅ | Danh sách ID ghế muốn hủy |
-
-### Business Rules
-- Chỉ hủy được ghế do chính user đó giữ
-- Ghế phải ở trạng thái `RESERVED` hoặc `PAYMENT_PROCESSING`
-- Nếu ghế gắn với order, order sẽ được cập nhật thành `CANCELLED`
-
-### Request Example
+|---|---|---:|---|
+| `seatIds` | array | ✅ | Mảng ghế đang được chính user giữ |
+| `returnUrl` | string | ❌ | PayOS redirect; DTO hiện không validate URL |
+| `cancelUrl` | string | ❌ | PayOS redirect; DTO hiện không validate URL |
 
 ```json
 {
-  "seatIds": [
-    "770e8400-e29b-41d4-a716-446655440010",
-    "770e8400-e29b-41d4-a716-446655440011"
-  ]
+  "seatIds": ["seat-uuid-1"],
+  "returnUrl": "https://frontend.example/checkout",
+  "cancelUrl": "https://frontend.example/checkout"
 }
 ```
 
 ### Response Success (200)
-
 ```json
 {
   "success": true,
+  "statusCode": 200,
+  "message": "Khởi tạo thanh toán thành công!",
+  "data": {
+    "orderCode": 100000001,
+    "totalAmount": 200000,
+    "expiresAt": "2026-11-23T14:02:00.000Z",
+    "confirmUntil": "2026-11-23T14:02:30.000Z",
+    "paymentTimeout": "2026-11-23T14:02:00.000Z",
+    "expiredAt": 1795442520,
+    "serverTime": "2026-11-23T14:00:00.000Z",
+    "paymentInfo": {
+      "paymentLinkId": "payos-id",
+      "bin": "970422",
+      "accountNumber": "123456",
+      "accountName": "PAYOS",
+      "amount": 200000,
+      "description": "VE SU KIEN 100000001",
+      "qrCode": "000201...",
+      "currency": "VND"
+    }
+  }
+}
+```
+
+### Response Errors
+- `400`: body invalid; ghế không tồn tại, không thuộc user, không còn `RESERVED`, hết hạn; PayOS lỗi.
+- `401`: lỗi JWT.
+
+---
+
+## 6. Nhả ghế hoặc hủy theo order
+
+### Endpoint
+```http
+POST /api/seats/release
+```
+
+### Headers
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Path / Query Parameters
+Không có.
+
+### Request Body
+Phải có ít nhất một trong hai:
+
+| Field | Type | Required | Description |
+|---|---|---:|---|
+| `seatIds` | array | Điều kiện | Nhả các ghế `RESERVED` thuộc user; mảng rỗng sẽ nhả toàn bộ hold hiện tại |
+| `orderCode` | bigint/number/string số | Điều kiện | Hủy order thay vì nhả hold thường |
+
+```json
+{ "seatIds": ["seat-uuid-1"] }
+```
+
+hoặc:
+```json
+{ "orderCode": 100000001 }
+```
+
+### Response Success (200)
+```json
+{
+  "success": true,
+  "statusCode": 200,
   "message": "Đã hủy giữ chỗ thành công.",
   "data": [
     {
-      "id": "770e8400-e29b-41d4-a716-446655440010",
+      "id": "seat-uuid-1",
       "seat_number": "A1",
-      "current_order_id": null
-    },
-    {
-      "id": "770e8400-e29b-41d4-a716-446655440011",
-      "seat_number": "A2",
-      "current_order_id": null
+      "current_order_code": null
     }
   ]
 }
 ```
 
-### Response Error (400)
+### Response Errors
+- `400`: thiếu cả hai field hoặc orderCode invalid.
+- `404`: order không tồn tại/không thuộc user.
+- `409`: order không còn hủy được hoặc đang ở pha `CONFIRMING`.
+- `401`: lỗi JWT.
+
+---
+
+## Error xác thực dùng chung
 
 ```json
 {
   "success": false,
-  "message": "Danh sách seatIds không hợp lệ."
+  "statusCode": 401,
+  "message": "Bạn chưa đăng nhập.",
+  "data": { "code": "AUTH_REQUIRED" }
 }
 ```
 
-### cURL Example
+**Last Updated:** 2026-11-23
 
-```bash
-curl -X POST http://localhost:3000/api/seats/release \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{
-    "seatIds": [
-      "770e8400-e29b-41d4-a716-446655440010",
-      "770e8400-e29b-41d4-a716-446655440011"
-    ]
-  }'
-```
-
----
-
-## Concurrency Control
-
-### FOR UPDATE SKIP LOCKED
-
-```sql
-SELECT id, seat_number, price, zone_name
-FROM seats
-WHERE id = ANY($1::uuid[])
-  AND status = 'AVAILABLE'
-ORDER BY id ASC
-FOR UPDATE SKIP LOCKED;
-```
-
-**Lợi ích:**
-- ✅ Tránh deadlock
-- ✅ Không chặn request khác
-- ✅ Xử lý được hàng ngàn requests đồng thời
-- ✅ Trả về ngay những ghế lock được, bỏ qua ghế đang locked
-
-### Transaction Flow
-
-```
-1. BEGIN TRANSACTION
-2. Check user has active hold? → Reject if yes
-3. Try to lock requested seats (SKIP LOCKED)
-4. If locked all seats → UPDATE → COMMIT
-5. If locked partial → ROLLBACK → Return partial info
-6. If locked zero → ROLLBACK → Return all taken
-```
-
-### Performance
-
-- **Average response time**: < 50ms
-- **P99**: < 200ms
-- **Concurrent requests**: Hỗ trợ 1000+ req/s
-- **Database**: PostgreSQL connection pool (max 20)
-
----
-
-## Flow Diagrams
-
-### Seat Booking Flow
-
-```
-[User] → Select Seats
-  ↓
-[Frontend] → POST /api/seats/request-hold
-  ↓
-[Backend] → Check active hold
-  ↓ No active hold
-[Backend] → Lock seats (FOR UPDATE SKIP LOCKED)
-  ↓
-  ├─ Locked ALL → UPDATE + COMMIT → Return SUCCESS
-  ├─ Locked PARTIAL → ROLLBACK → Return PARTIAL_AVAILABILITY
-  └─ Locked ZERO → ROLLBACK → Return ALL_SEATS_TAKEN
-```
-
-### Partial Availability Flow
-
-```
-[Backend] → Return PARTIAL_AVAILABILITY
-  ↓
-[Frontend] → Show dialog: "A1, A2 taken. Keep A3?"
-  ↓
-  ├─ User clicks "Yes" → POST /api/seats/confirm-partial
-  │   ↓
-  │   [Backend] → Try to reserve A3
-  │   ↓
-  │   ├─ Still available → SUCCESS
-  │   └─ Already taken → PARTIAL_HOLD_EXPIRED
-  │
-  └─ User clicks "No" → Go back to seat selection
-```
-
----
-
-## Error Codes Reference
-
-| Code | HTTP | Message |
-|------|------|---------|
-| FULLY_RESERVED | 200 | Đã giữ chỗ thành công |
-| PARTIAL_AVAILABILITY | 200 | Một số ghế bạn chọn vừa có người khác giữ |
-| PARTIAL_RESERVED_SUCCESS | 200 | Đã xác nhận giữ các ghế còn lại thành công |
-| USER_HAS_ACTIVE_HOLD | 400 | Bạn đang có một phiên giữ vé chưa hoàn tất |
-| ALL_SEATS_TAKEN | 400 | Tất cả các ghế bạn chọn đều đã bị người khác giữ |
-| EXCEEDED_MAX_SEATS | 400 | Bạn chỉ được chọn tối đa 4 ghế |
-| PARTIAL_HOLD_EXPIRED | 400 | Các ghế còn lại cũng đã được người khác giữ mất |
-
----
-
-**📅 Last Updated:** 2024-10-18  
-**📖 Version:** 1.2
+**Version:** Current backend contract

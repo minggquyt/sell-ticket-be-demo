@@ -5,10 +5,29 @@ if (!process.env.JWT_SECRET) {
   throw new Error('❌ SECURITY ERROR: JWT_SECRET không được cấu hình trong .env. Hệ thống không thể khởi động an toàn.');
 }
 
+if (!process.env.OTP_HMAC_SECRET) {
+  throw new Error('❌ SECURITY ERROR: OTP_HMAC_SECRET không được cấu hình trong .env.');
+}
+
+const positiveInt = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 module.exports = {
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '1d',
   BCRYPT_SALT_ROUNDS: 10,
+  OTP_HMAC_SECRET: process.env.OTP_HMAC_SECRET,
+  OTP_TTL_SECONDS: positiveInt(process.env.OTP_TTL_SECONDS, 300),
+  REGISTRATION_TTL_SECONDS: positiveInt(process.env.REGISTRATION_TTL_SECONDS, 900),
+  OTP_RESEND_COOLDOWN_SECONDS: positiveInt(process.env.OTP_RESEND_COOLDOWN_SECONDS, 60),
+  OTP_MAX_ATTEMPTS: positiveInt(process.env.OTP_MAX_ATTEMPTS, 5),
+  OTP_MAX_RESENDS: positiveInt(process.env.OTP_MAX_RESENDS, 3),
+  EMAIL_PROVIDER: String(process.env.EMAIL_PROVIDER || 'resend').toLowerCase(),
+  EMAIL_FROM: process.env.EMAIL_FROM || '',
+  GMAIL_USER: process.env.GMAIL_USER || '',
+  GMAIL_APP_PASSWORD: process.env.GMAIL_APP_PASSWORD || '',
   
   // FIX #9: Magic numbers -> Named constants
   SEAT_HOLD_DURATION_SECONDS: 30,

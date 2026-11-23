@@ -2,575 +2,381 @@
 
 Base URL: `http://localhost:3000/api/orders`
 
-> [!IMPORTANT]
-> Nội dung bên dưới là tài liệu **Legacy v1.2** (luồng cũ `/api/orders/checkout` chuyển hướng ra trang PayOS với timeout 5 phút).
-> Hệ thống hiện tại đã chuyển sang **In-Site PayOS QR Checkout** (`120s + 30s`, SSE realtime, hiển thị VietQR trực tiếp trên web). Team vui lòng tham khảo bộ tài liệu mới nhất tại:
-> - [IN_SITE_PAYOS_QR_CHECKOUT.md](../payment/IN_SITE_PAYOS_QR_CHECKOUT.md) — Đặc tả API & kiến trúc In-Site QR Checkout (`POST /api/seats/start-checkout`, `GET /api/orders/:orderCode/payment`, `GET /api/orders/:orderCode/events`, `POST /api/orders/:orderCode/cancel`, `GET /api/orders/:orderCode/status`)
-> - [PAYMENT_FLOW.md](../payment/PAYMENT_FLOW.md) — Sơ đồ vòng đời đơn hàng và luồng thanh toán hiện hành
+> Luồng hiện hành dùng QR tại website: giữ ghế → `POST /api/seats/start-checkout` → theo dõi order bằng REST/SSE. Không có route `/api/orders/checkout` hoặc `/api/orders/my-orders` trong backend hiện tại.
 
 ---
 
-## 1. Khởi tạo thanh toán (Checkout)
+## 1. Lấy lịch sử đơn hàng
 
 ### Endpoint
-```
-POST /api/orders/checkout
-```
-
-### Authentication
-✅ Required - JWT token
-
-### Headers
 ```http
-Content-Type: application/json
-Authorization: Bearer <token>
+GET /api/orders/my-history
 ```
-
-### Request Body
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| seatIds | array[uuid] | ✅ | Danh sách ID ghế đã giữ |
-| returnUrl | string | ❌ | URL redirect khi thanh toán thành công |
-| cancelUrl | string | ❌ | URL redirect khi hủy thanh toán |
-
-### Validation Rules
-
-#### seatIds
-- **Type**: Array of UUID
-- **Required**: Có
-- **Not Empty**: Ít nhất 1 ghế
-
-#### returnUrl, cancelUrl
-- **Type**: String (URL)
-- **Required**: Không (có default)
-- **Default returnUrl**: `http://127.0.0.1:5500/index.html?orderId={orderId}&status=success`
-- **Default cancelUrl**: `http://127.0.0.1:5500/index.html?orderId={orderId}&status=cancel`
-
-### Business Rules
-
-1. **Seat Validation**:
-   - Ghế phải ở trạng thái `RESERVED`
-   - Ghế phải được giữ bởi chính user này
-   - Ghế chưa hết hạn giữ (reserved_until > now)
-
-2. **Order Creation**:
-   - Tạo order với status `PAYMENT_PROCESSING`
-   - Timeout: 5 phút (PAYMENT_TIMEOUT_MINUTES)
-   - Tạo orderCode unique (8 digits)
-
-3. **Seat Status Update**:
-   - `RESERVED` → `PAYMENT_PROCESSING`
-   - Gia hạn `reserved_until` thêm 5 phút
-   - Gắn `current_order_id`
-
-4. **PayOS Integration**:
-   - Tạo payment link từ PayOS
-   - Description: `VE SU KIEN {orderCode}` (max 25 chars)
-   - Amount: Tổng giá tất cả ghế
-
-### Request Example
-
-```json
-{
-  "seatIds": [
-    "770e8400-e29b-41d4-a716-446655440010",
-    "770e8400-e29b-41d4-a716-446655440011"
-  ],
-  "returnUrl": "https://yoursite.com/payment-success",
-  "cancelUrl": "https://yoursite.com/payment-cancel"
-}
-```
-
-### Response Success (200)
-
-```json
-{
-  "success": true,
-  "message": "Khởi tạo thanh toán PayOS thành công!",
-  "data": {
-    "orderId": "bb0e8400-e29b-41d4-a716-446655440100",
-    "orderCode": 12345678,
-    "checkoutUrl": "https://pay.payos.vn/web/uuid-here",
-    "totalAmount": 1000000,
-    "paymentTimeout": "2024-10-18T12:35:00.000Z"
-  }
-}
-```
-
-#### Success Response Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| success | boolean | true |
-| message | string | Thông báo |
-| data.orderId | uuid | ID đơn hàng trong hệ thống |
-| data.orderCode | number | Mã đơn hàng (8 digits) |
-| data.checkoutUrl | string | Link thanh toán PayOS |
-| data.totalAmount | number | Tổng tiền (VNĐ) |
-| data.paymentTimeout | datetime | Thời điểm hết hạn thanh toán |
-
-### Response Error Case 1: Ghế không hợp lệ (400)
-
-```json
-{
-  "success": false,
-  "message": "Ghế A1 không hợp lệ hoặc đã hết hạn giữ chỗ."
-}
-```
-
-**Reasons**:
-- Ghế không phải `RESERVED`
-- Ghế không thuộc user này
-- Ghế đã hết hạn giữ
-
-### Response Error Case 2: Lỗi PayOS (400)
-
-```json
-{
-  "success": false,
-  "message": "Không thể tạo liên kết thanh toán PayOS: Credentials not configured"
-}
-```
-
-### Response Error Case 3: Unauthorized (401)
-
-```json
-{
-  "success": false,
-  "message": "Bạn chưa đăng nhập."
-}
-```
-
-### cURL Example
-
-```bash
-curl -X POST http://localhost:3000/api/orders/checkout \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
-  -d '{
-    "seatIds": [
-      "770e8400-e29b-41d4-a716-446655440010",
-      "770e8400-e29b-41d4-a716-446655440011"
-    ],
-    "returnUrl": "https://yoursite.com/success",
-    "cancelUrl": "https://yoursite.com/cancel"
-  }'
-```
-
-### Frontend Flow
-
-```javascript
-// 1. User clicks "Thanh toán"
-const response = await fetch('/api/orders/checkout', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`
-  },
-  body: JSON.stringify({
-    seatIds: selectedSeats,
-    returnUrl: window.location.origin + '/payment-success',
-    cancelUrl: window.location.origin + '/payment-cancel'
-  })
-});
-
-const data = await response.json();
-
-// 2. Redirect to PayOS
-if (data.success) {
-  window.location.href = data.data.checkoutUrl;
-}
-```
-
----
-
-## 2. Lấy lịch sử đơn hàng
-
-### Endpoint
-```
-GET /api/orders/my-orders
-```
-
-### Authentication
-✅ Required - JWT token
 
 ### Headers
 ```http
 Authorization: Bearer <token>
 ```
 
-### Query Parameters
-Không có
+### Path / Query Parameters
+Không có. Không có body.
 
 ### Response Success (200)
-
 ```json
 {
   "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
   "data": [
     {
-      "order_id": "bb0e8400-e29b-41d4-a716-446655440100",
-      "total_amount": "1000000",
-      "order_status": "SUCCESS",
-      "created_at": "2024-10-18T12:00:00.000Z",
-      "event_title": "Concert Rock Festival 2024",
-      "event_type": "SEAT_BASED",
-      "location": "SVĐ Mỹ Đình, Hà Nội",
+      "refundBank": null,
+      "refundBankError": null,
+      "refundSnapshot": null,
+      "orderCode": 100000001,
+      "totalAmount": "400000",
+      "status": "SUCCESS",
+      "expiresAt": "2026-11-23T14:02:00.000Z",
+      "confirmUntil": "2026-11-23T14:02:30.000Z",
+      "phase": "FINAL",
+      "checkoutUrl": null,
+      "createdAt": "2026-11-23T14:00:00.000Z",
+      "eventId": "event-uuid",
+      "eventTitle": "Concert 2026",
+      "eventType": "SEAT_BASED",
+      "eventStartTime": "2026-12-31T12:00:00.000Z",
+      "location": "Ha Noi",
       "items": [
-        {
-          "seat_number": "A1",
-          "zone_name": "VIP",
-          "price": "500000"
-        },
-        {
-          "seat_number": "A2",
-          "zone_name": "VIP",
-          "price": "500000"
-        }
-      ]
-    },
-    {
-      "order_id": "bb0e8400-e29b-41d4-a716-446655440101",
-      "total_amount": "600000",
-      "order_status": "FAILED",
-      "created_at": "2024-10-17T10:00:00.000Z",
-      "event_title": "Festival Music 2024",
-      "event_type": "ZONE_BASED",
-      "location": "Công viên Thống Nhất",
-      "items": [
-        {
-          "seat_number": "VIP-15",
-          "zone_name": "VIP",
-          "price": "300000"
-        },
-        {
-          "seat_number": "REGULAR-20",
-          "zone_name": "REGULAR",
-          "price": "150000"
-        },
-        {
-          "seat_number": "REGULAR-21",
-          "zone_name": "REGULAR",
-          "price": "150000"
-        }
+        { "seatId": "seat-uuid", "seatNumber": "A1", "zoneName": "STANDARD", "price": 200000 }
       ]
     }
   ]
 }
 ```
 
-#### Response Fields
+`checkoutUrl` chỉ có thể xuất hiện khi status còn `PAYMENT_PROCESSING`. Với dữ liệu admin, item có thể không có `seatId`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| success | boolean | true |
-| data | array | Danh sách đơn hàng |
-| data[].order_id | uuid | ID đơn hàng |
-| data[].total_amount | string | Tổng tiền |
-| data[].order_status | enum | Trạng thái đơn |
-| data[].created_at | datetime | Thời gian tạo |
-| data[].event_title | string | Tên sự kiện |
-| data[].event_type | enum | Loại sự kiện |
-| data[].location | string | Địa điểm |
-| data[].items | array | Chi tiết vé |
-| data[].items[].seat_number | string | Số ghế |
-| data[].items[].zone_name | string | Khu vực |
-| data[].items[].price | string | Giá vé |
-
-#### Order Status Values
-
-| Status | Description | Color |
-|--------|-------------|-------|
-| PAYMENT_PROCESSING | Đang chờ thanh toán | 🟡 Yellow |
-| SUCCESS | Thanh toán thành công | 🟢 Green |
-| FAILED | Thanh toán thất bại | 🔴 Red |
-| CANCELLED | Đã hủy | ⚫ Gray |
-
-### Response Error (401)
-
-```json
-{
-  "success": false,
-  "message": "Bạn chưa đăng nhập."
-}
-```
-
-### Response Error (500)
-
-```json
-{
-  "success": false,
-  "message": "Database error message"
-}
-```
-
-### cURL Example
-
-```bash
-curl -X GET http://localhost:3000/api/orders/my-orders \
-  -H "Authorization: Bearer <token>"
-```
+### Response Errors
+- `401`: lỗi JWT.
+- `500`: lỗi DB.
 
 ---
 
-## 3. PayOS Webhook (Internal)
+## 2. Lấy QR/thông tin thanh toán của order
 
 ### Endpoint
+```http
+GET /api/orders/:orderCode/payment
 ```
-POST /payos-webhook
-```
-
-⚠️ **Endpoint này KHÔNG nên gọi thủ công!**  
-Đây là webhook được PayOS gọi tự động sau khi thanh toán.
-
-### Authentication
-❌ Không yêu cầu - Public webhook endpoint
 
 ### Headers
+```http
+Authorization: Bearer <token>
+```
+
+### Path Parameters
+| Field | Type | Required | Description |
+|---|---|---:|---|
+| `orderCode` | bigint | ✅ | Primary key bảng `orders`, số nguyên dương |
+
+### Query Parameters
+| Field | Type | Required | Description |
+|---|---|---:|---|
+| `sync` | string | ❌ | `1` hoặc `true` để thử đối soát PayOS; có cooldown 10 giây/order |
+
+### Request Body
+Không có.
+
+### Response Success (200)
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
+  "data": {
+    "orderCode": 100000001,
+    "status": "PAYMENT_PROCESSING",
+    "phase": "WAITING",
+    "totalAmount": 200000,
+    "expiresAt": "2026-11-23T14:02:00.000Z",
+    "confirmUntil": "2026-11-23T14:02:30.000Z",
+    "serverTime": "2026-11-23T14:00:00.000Z",
+    "createdAt": "2026-11-23T14:00:00.000Z",
+    "paymentInfo": {
+      "paymentLinkId": "payos-id",
+      "bin": "970422",
+      "accountNumber": "123456",
+      "accountName": "PAYOS",
+      "amount": 200000,
+      "description": "VE SU KIEN 100000001",
+      "qrCode": "000201...",
+      "currency": "VND"
+    },
+    "eventId": "event-uuid",
+    "eventTitle": "Concert 2026",
+    "eventType": "SEAT_BASED",
+    "eventStartTime": "2026-12-31T12:00:00.000Z",
+    "location": "Ha Noi",
+    "items": [
+      { "seatId": "seat-uuid", "seatNumber": "A1", "zoneName": "STANDARD", "price": 200000 }
+    ]
+  }
+}
+```
+
+`paymentInfo` chỉ được trả khi status là `PAYMENT_PROCESSING`; status cuối trả `null`.
+
+### Response Errors
+- `400`: orderCode không hợp lệ.
+- `404`: order không tồn tại hoặc không thuộc user.
+- `401`: lỗi JWT.
+
+---
+
+## 3. SSE trạng thái order realtime
+
+### Endpoint
+```http
+GET /api/orders/:orderCode/events
+```
+
+### Headers
+```http
+Authorization: Bearer <token>
+Accept: text/event-stream
+```
+
+> Native browser `EventSource` không cho tự đặt `Authorization`; frontend cần fetch-stream/polyfill hoặc cơ chế proxy phù hợp.
+
+### Path Parameters
+`orderCode`: bigint số nguyên dương.
+
+### Query / Body
+Không có.
+
+### Response Success (200 — `text/event-stream`)
+Headers response:
+
+```http
+Content-Type: text/event-stream; charset=utf-8
+Cache-Control: no-cache, no-transform
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+Initial event:
+```text
+event: init
+data: {"type":"INIT","orderCode":100000001,"status":"PAYMENT_PROCESSING","phase":"WAITING","serverTime":"2026-11-23T14:00:00.000Z","order":{...}}
+```
+
+Status event:
+```text
+event: order_status
+data: {"type":"STATUS_CHANGED","orderCode":100000001,"status":"SUCCESS","phase":"FINAL","serverTime":"2026-11-23T14:01:00.000Z","order":{...}}
+```
+
+Heartbeat: `: heartbeat`. Kết nối tự đóng khi status kết thúc hoặc sau tối đa 180 giây. Tối đa 5 connection/order.
+
+### Response Errors trước khi mở stream
+JSON `400`, `404`, `401` giống endpoint payment.
+
+---
+
+## 4. Đồng bộ trạng thái order
+
+### Endpoint
+```http
+GET /api/orders/:orderCode/status
+```
+
+### Headers
+```http
+Authorization: Bearer <token>
+```
+
+### Path Parameters
+`orderCode`: bigint số nguyên dương.
+
+### Query / Body
+Không có. Endpoint tự thử sync PayOS với cooldown.
+
+### Response Success (200)
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Thành công.",
+  "data": {
+    "orderCode": 100000001,
+    "status": "SUCCESS",
+    "phase": "FINAL",
+    "checkoutUrl": null,
+    "totalAmount": 200000,
+    "expiresAt": "2026-11-23T14:02:00.000Z",
+    "confirmUntil": "2026-11-23T14:02:30.000Z",
+    "serverTime": "2026-11-23T14:01:00.000Z",
+    "createdAt": "2026-11-23T14:00:00.000Z",
+    "eventId": "event-uuid",
+    "eventTitle": "Concert 2026",
+    "eventType": "SEAT_BASED",
+    "eventStartTime": "2026-12-31T12:00:00.000Z",
+    "location": "Ha Noi",
+    "items": []
+  }
+}
+```
+
+### Response Errors
+- `400`: orderCode invalid.
+- `404`: không tồn tại/không thuộc user.
+- `401`: lỗi JWT.
+
+---
+
+## 5. Hủy order
+
+### Endpoint
+```http
+POST /api/orders/:orderCode/cancel
+```
+
+### Headers
+```http
+Authorization: Bearer <token>
+```
+
+### Path Parameters
+`orderCode`: bigint số nguyên dương.
+
+### Query / Body
+Không có.
+
+### Response Success (200)
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Đã hủy đơn hàng thành công.",
+  "data": {
+    "orderCode": 100000001,
+    "status": "CANCELLED",
+    "releasedSeats": [
+      { "id": "seat-uuid", "seat_number": "A1", "current_order_code": null }
+    ]
+  }
+}
+```
+
+### Response Errors
+| HTTP | Case |
+|---|---|
+| 400 | orderCode invalid |
+| 404 | order không tồn tại/không thuộc user |
+| 409 | status không phải `PAYMENT_PROCESSING` |
+| 409 | đã qua `expiresAt`, đang pha xác nhận ngân hàng |
+| 401 | lỗi JWT |
+
+---
+
+## 6. PayOS webhook
+
+### Endpoint
+```http
+POST /api/payos-webhook
+```
+
+### Authentication / Headers
+Không dùng JWT. PayOS signature được verify bằng checksum key.
+
 ```http
 Content-Type: application/json
 ```
 
-### Request Body (From PayOS)
+### Path / Query Parameters
+Không có.
+
+### Request Body
+Payload chuẩn từ PayOS, tối thiểu gồm `code`, `success`, `data` và `signature`:
 
 ```json
 {
   "code": "00",
+  "success": true,
   "data": {
-    "orderCode": 12345678,
-    "amount": 1000000,
-    "description": "VE SU KIEN 12345678",
-    "accountNumber": "1234567890",
-    "reference": "FT123456",
-    "transactionDateTime": "2024-10-18T12:30:00+07:00",
-    "currency": "VND",
-    "paymentLinkId": "uuid",
-    "counterAccountBankId": "",
-    "counterAccountBankName": "",
-    "counterAccountName": "NGUYEN VAN A",
-    "counterAccountNumber": "0987654321",
-    "virtualAccountName": "",
-    "virtualAccountNumber": ""
+    "orderCode": 100000001,
+    "amount": 200000,
+    "code": "00",
+    "transactionDateTime": "2026-11-23 21:01:00"
   },
-  "signature": "signature_here"
+  "signature": "<hmac>"
 }
 ```
 
-#### Request Body Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| code | string | Mã kết quả: "00" = success |
-| data.orderCode | number | Mã đơn hàng (8 digits) |
-| data.amount | number | Số tiền thanh toán |
-| signature | string | Chữ ký xác thực (optional) |
-
-### Response (Always 200)
-
+### Response — luôn HTTP 200
+Success:
 ```json
 {
   "success": true,
-  "message": "Đã nhận webhook thành công"
+  "statusCode": 200,
+  "message": "Đã nhận và xử lý webhook thành công",
+  "data": null
 }
 ```
 
-⚠️ **Luôn trả về 200** để PayOS không retry
-
-### Business Logic
-
-#### Case 1: code = "00" (Success)
-1. Tìm order theo orderCode
-2. Cập nhật order status → `SUCCESS`
-3. Cập nhật seats:
-   - status → `SOLD`
-   - reserved_by → NULL
-   - reserved_until → NULL
-   - current_order_id → NULL
-4. Log thành công
-
-#### Case 2: code != "00" (Failed/Cancelled)
-1. Tìm order theo orderCode
-2. Cập nhật order status → `FAILED`
-3. Cập nhật seats:
-   - status → `AVAILABLE`
-   - reserved_by → NULL
-   - reserved_until → NULL
-   - current_order_id → NULL
-4. Log thất bại
-
-#### Case 3: Order không tồn tại
-- Log warning: "Ping test từ PayOS"
-- Return 200 (OK)
-
-### PayOS Code Values
-
-| Code | Meaning |
-|------|---------|
-| 00 | Giao dịch thành công |
-| 01 | Giao dịch thất bại |
-| 02 | Giao dịch bị hủy |
-
-### Idempotency
-
-- Nếu order đã ở trạng thái `SUCCESS`, webhook tiếp theo sẽ bị ignore
-- Tránh xử lý trùng lặp
-
-### Security
-
-- ✅ Signature verification (optional, có thể bỏ qua nếu không verify được)
-- ✅ Order code validation
-- ✅ Idempotency check
-
-### Testing Webhook (Development)
-
-#### Test Endpoint
-```
-POST /api/orders/webhook
-```
-
-**Body:**
+Signature invalid/test ping:
 ```json
 {
-  "orderCode": 12345678,
-  "success": true
+  "success": false,
+  "statusCode": 200,
+  "message": "Chữ ký webhook không hợp lệ hoặc là ping test",
+  "data": null
 }
 ```
 
-hoặc
-
-```json
-{
-  "orderId": "bb0e8400-e29b-41d4-a716-446655440100",
-  "success": false
-}
-```
+Internal processing error cũng trả `200`, `success=false` để acknowledge webhook.
 
 ---
 
-## 4. Health Check - PayOS Webhook
+## 7. Health check PayOS webhook
 
 ### Endpoint
-```
+```http
 GET /api/payos-webhook
 ```
 
-### Authentication
-❌ Không yêu cầu
+Public; không params/body.
 
-### Response
-
+### Response Success (200)
 ```json
 {
   "success": true,
-  "message": "PayOS Webhook endpoint is active and running!"
+  "statusCode": 200,
+  "message": "PayOS Webhook endpoint is active and running!",
+  "data": null
 }
 ```
 
-### Use Case
-PayOS có thể gọi endpoint này để kiểm tra webhook có hoạt động không.
-
 ---
 
-## Payment Flow
+## Trạng thái và thời gian
 
-```
-[User] → Select Seats → Reserve Seats
-  ↓
-[User] → Click "Thanh toán"
-  ↓
-[Frontend] → POST /api/orders/checkout
-  ↓
-[Backend] → Create Order (PAYMENT_PROCESSING)
-  ↓
-[Backend] → Update Seats (PAYMENT_PROCESSING)
-  ↓
-[Backend] → PayOS API → Create payment link
-  ↓
-[Backend] → Return checkoutUrl
-  ↓
-[Frontend] → Redirect to PayOS
-  ↓
-[User] → Enter payment info on PayOS
-  ↓
-[PayOS] → Process payment
-  ↓
-  ├─ Success → POST /payos-webhook (code=00)
-  │   ↓
-  │   [Backend] → Order: SUCCESS, Seats: SOLD
-  │   ↓
-  │   [PayOS] → Redirect to returnUrl
-  │
-  └─ Failed → POST /payos-webhook (code!=00)
-      ↓
-      [Backend] → Order: FAILED, Seats: AVAILABLE
-      ↓
-      [PayOS] → Redirect to cancelUrl
+- Order: `PAYMENT_PROCESSING`, `SUCCESS`, `FAILED`, `CANCELLED`, `EXPIRED`, `REFUND_PENDING`, `REFUNDED`.
+- `WAITING`: trước `expiresAt` (120 giây quét QR).
+- `CONFIRMING`: từ `expiresAt` đến `confirmUntil` (+30 giây chờ webhook).
+- `FINAL`: trạng thái kết thúc.
+- Thanh toán đến muộn/có tiền sau cancel có thể chuyển `REFUND_PENDING`.
+
+## Error xác thực dùng chung
+
+```json
+{
+  "success": false,
+  "statusCode": 401,
+  "message": "Bạn chưa đăng nhập.",
+  "data": { "code": "AUTH_REQUIRED" }
+}
 ```
 
----
+**Last Updated:** 2026-11-23
 
-## Data Types & Constraints
-
-### Order
-
-| Field | Type | Constraints |
-|-------|------|-------------|
-| id | uuid | Primary Key, Auto |
-| user_id | uuid | Foreign Key → users(id), NOT NULL |
-| total_amount | decimal(10,0) | NOT NULL, >= 0 |
-| status | enum | 'PAYMENT_PROCESSING', 'SUCCESS', 'FAILED', 'CANCELLED' |
-| expires_at | timestamp | NOT NULL |
-| order_code | bigint | Unique, 8 digits |
-| created_at | timestamp | Default: NOW() |
-
-### Order Items
-
-| Field | Type | Constraints |
-|-------|------|-------------|
-| id | uuid | Primary Key, Auto |
-| order_id | uuid | Foreign Key → orders(id), NOT NULL |
-| seat_id | uuid | Foreign Key → seats(id), NOT NULL |
-| price | decimal(10,0) | NOT NULL, >= 0 |
-
-### Indexes
-
-```sql
-CREATE INDEX idx_orders_user_id ON orders(user_id);
-CREATE INDEX idx_orders_order_code ON orders(order_code);
-CREATE INDEX idx_orders_status ON orders(status);
-CREATE INDEX idx_order_items_order_id ON order_items(order_id);
-```
-
----
-
-## Error Handling
-
-### PayOS Errors
-
-| Error | Reason | Solution |
-|-------|--------|----------|
-| Credentials not configured | Thiếu PAYOS_CLIENT_ID, PAYOS_API_KEY, PAYOS_CHECKSUM_KEY | Kiểm tra .env |
-| Invalid amount | Amount <= 0 hoặc quá lớn | Kiểm tra seat prices |
-| Network timeout | PayOS API không phản hồi | Retry hoặc thông báo user |
-
-### Order Errors
-
-| Error | Reason | Solution |
-|-------|--------|----------|
-| Ghế không hợp lệ | Ghế không RESERVED hoặc hết hạn | Giữ lại ghế trước |
-| Order không tìm thấy | orderCode không tồn tại | Kiểm tra orderCode |
-
----
-
-## Constants
-
-| Constant | Value | Description |
-|----------|-------|-------------|
-| PAYMENT_TIMEOUT_MINUTES | 5 | Thời gian chờ thanh toán |
-| ORDER_CODE_LENGTH | 8 | Độ dài order code |
-
----
-
-**📅 Last Updated:** 2024-10-18  
-**📖 Version:** 1.2
+**Version:** Current backend contract

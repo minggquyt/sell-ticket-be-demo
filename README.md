@@ -186,6 +186,13 @@ DATABASE_URL=postgresql://user:password@host:5432/database
 
 # Authentication
 JWT_SECRET=your-secret-key-change-this-in-production
+OTP_HMAC_SECRET=your-independent-long-random-secret
+
+# Registration Email OTP (Gmail App Password)
+EMAIL_PROVIDER=gmail
+EMAIL_FROM="Ticket App <your-email@gmail.com>"
+GMAIL_USER=your-email@gmail.com
+GMAIL_APP_PASSWORD=your-16-character-google-app-password
 
 # Payment Gateway
 PAYOS_CLIENT_ID=your-payos-client-id
@@ -196,6 +203,10 @@ PAYOS_CHECKSUM_KEY=your-payos-checksum-key
 PORT=3000
 NODE_ENV=development
 ```
+
+Để dùng Gmail, bật xác minh 2 bước cho tài khoản Google rồi tạo **App Password** tại
+Google Account → Security → App passwords. Không dùng mật khẩu đăng nhập Gmail thông thường.
+`GMAIL_APP_PASSWORD` có thể nhập liền 16 ký tự hoặc giữ khoảng trắng; backend sẽ tự chuẩn hóa.
 
 ### Constants
 
@@ -293,21 +304,33 @@ Xem thêm: **[docs/README.md#troubleshooting](./docs/README.md#-troubleshooting)
 
 ### Public Endpoints
 - `GET /api/events` - List events
-- `GET /api/events/:id` - Event details
+- `GET /api/events/:eventId/details` - Danh sách ghế/zone của event
 
 ### Customer Endpoints (JWT required)
 - `POST /api/auth/register` - Register
 - `POST /api/auth/login` - Login
-- `POST /api/seats/request-hold` - Hold seats
-- `POST /api/seats/confirm-partial` - Confirm partial
+- `GET /api/auth/me` / `PUT /api/auth/me` - Hồ sơ cá nhân
+- `GET /api/auth/me/bank` / `PUT /api/auth/me/bank` - Ngân hàng hoàn tiền
+- `GET /api/seats/my-active-session` - Phiên giữ/thanh toán hiện tại
+- `POST /api/seats/reserve` - Hold seats
+- `POST /api/seats/confirm-partial-hold` - Confirm partial
 - `POST /api/seats/reserve-zone` - Zone booking
+- `POST /api/seats/start-checkout` - Tạo order và QR PayOS
 - `POST /api/seats/release` - Release seats
-- `POST /api/orders/checkout` - Checkout
-- `GET /api/orders/my-orders` - Order history
+- `GET /api/orders/my-history` - Order history
+- `GET /api/orders/:orderCode/payment` - Thông tin QR
+- `GET /api/orders/:orderCode/events` - SSE trạng thái
+- `GET /api/orders/:orderCode/status` - Đồng bộ trạng thái
+- `POST /api/orders/:orderCode/cancel` - Hủy order
 
 ### Admin Endpoints (ADMIN role)
 - `POST /api/admin/events` - Create event
-- `DELETE /api/admin/events/:id` - Delete event
+- `PUT /api/admin/events/:eventId` - Update event
+- `DELETE /api/admin/events/:eventId` - Delete event
+- `GET /api/admin/tickets` - List tickets
+- `GET /api/admin/refunds` - List refunds
+- `POST /api/admin/orders/:orderCode/confirm-refund` - Confirm refund
+- `POST /api/admin/orders/:orderCode/refund-bank-error` - Mark invalid refund bank
 
 Xem chi tiết: **[docs/api/](./docs/api/)**
 
