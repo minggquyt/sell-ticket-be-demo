@@ -12,11 +12,13 @@
 docs/
 ├── README.md                    # Trang này
 ├── api/                         # API Documentation
-│   ├── authentication.md        # Auth APIs (Register, Login)
+│   ├── authentication.md        # Auth APIs (Register, Login, Profile/Bank)
 │   ├── events.md                # Event APIs (List, Details)
 │   ├── seat-booking.md          # Seat Booking APIs (Hold, Confirm, Release)
 │   ├── orders-payment.md        # Order & Payment APIs (Legacy v1.2 reference)
 │   └── admin.md                 # Admin APIs (Create/Delete Events)
+├── auth/                        # 🆕 Auth Expiry & Error Contract Docs
+│   └── AUTO_LOGOUT_EXPIRED_TOKEN.md # Chuẩn lỗi 401/403, serverTime & đồng bộ auto-logout FE
 ├── payment/                     # 🆕 In-Site PayOS QR Checkout Docs
 │   ├── IN_SITE_PAYOS_QR_CHECKOUT.md # Đặc tả chi tiết QR nội bộ, SSE & 120s+30s
 │   └── PAYMENT_FLOW.md          # Sơ đồ vòng đời đơn hàng & luồng xử lý
@@ -54,7 +56,8 @@ docs/
 
 | Topic | File | Description |
 |-------|------|-------------|
-| **Authentication** | [authentication.md](./api/authentication.md) | Đăng ký, đăng nhập, JWT token |
+| **Authentication** | [authentication.md](./api/authentication.md) | Đăng ký, đăng nhập (`data.serverTime`), chuẩn lỗi `401`/`403` |
+| **Auto-Logout & Auth Contract** | [auth/AUTO_LOGOUT_EXPIRED_TOKEN.md](./auth/AUTO_LOGOUT_EXPIRED_TOKEN.md) | Tách bạch `401` (`AUTH_REQUIRED`/`TOKEN_EXPIRED`/`TOKEN_INVALID`) vs `403 FORBIDDEN`, `JWT_EXPIRES_IN` & `serverTime` |
 | **Events** | [events.md](./api/events.md) | Lấy danh sách sự kiện, xem chi tiết ghế/zone |
 | **Seat Booking** | [seat-booking.md](./api/seat-booking.md) | Giữ ghế, xác nhận partial, hủy giữ chỗ |
 | **Orders & Payment (Legacy)** | [orders-payment.md](./api/orders-payment.md) | Tham khảo API v1.2 (luồng mới xem mục Payment & Refund ở trên) |
@@ -151,7 +154,8 @@ POST /api/payos-webhook          # PayOS webhook (HMAC SHA256 verification)
 
 #### Authentication & Authorization
 - ✅ Đăng ký tài khoản với validation
-- ✅ Đăng nhập với JWT (expires: 1 day)
+- ✅ Đăng nhập với JWT (mặc định `1d`, cấu hình qua `JWT_EXPIRES_IN`) + trả `data.serverTime` bù clock skew
+- ✅ Chuẩn hóa HTTP `401` (`AUTH_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_INVALID`) tách biệt HTTP `403` (`FORBIDDEN`)
 - ✅ Role-based access control (CUSTOMER, ADMIN)
 - ✅ Password hashing (bcryptjs, salt rounds: 10)
 
@@ -298,7 +302,7 @@ http://localhost:3000
 | SEAT_RELEASE_JOB_INTERVAL_MS | 15s | src/config/constants.js |
 | SSE_HEARTBEAT_INTERVAL_MS | 15s | src/config/constants.js |
 | SSE_ORDER_MAX_DURATION_MS | 180s | src/config/constants.js |
-| JWT_EXPIRES_IN | 1 day | src/config/constants.js |
+| JWT_EXPIRES_IN | `process.env.JWT_EXPIRES_IN \|\| '1d'` | src/config/constants.js |
 | BCRYPT_SALT_ROUNDS | 10 | src/config/constants.js |
 | DB_CONNECTION_POOL | 20 | src/config/db.js |
 
@@ -325,13 +329,14 @@ Error: connect ECONNREFUSED
 ```
 **Solution**: Kiểm tra `DATABASE_URL` trong `.env` và PostgreSQL đang chạy
 
-#### 3. JWT token invalid
+#### 3. JWT token invalid / expired (`401 TOKEN_INVALID` / `401 TOKEN_EXPIRED`)
 ```
-Error: jwt malformed
+401 { "success": false, "data": { "code": "TOKEN_EXPIRED" | "TOKEN_INVALID" } }
 ```
-**Solution**: 
-- Token có thể đã hết hạn (1 ngày)
-- Kiểm tra `JWT_SECRET` khớp với secret đã dùng để tạo token
+**Solution**:
+- Token hết hạn (mặc định 1 ngày hoặc theo `JWT_EXPIRES_IN`) sẽ trả `401 TOKEN_EXPIRED`
+- Kiểm tra `JWT_SECRET` khớp với secret đã dùng để tạo token (`401 TOKEN_INVALID`)
+- Chi tiết hợp đồng và cách test xem [auth/AUTO_LOGOUT_EXPIRED_TOKEN.md](./auth/AUTO_LOGOUT_EXPIRED_TOKEN.md)
 
 #### 4. Ghế không giữ được
 ```
@@ -396,6 +401,6 @@ Nếu có câu hỏi hoặc cần hỗ trợ, vui lòng:
 
 ---
 
-**📅 Last Updated:** 2026-11-22  
-**📖 Current Version:** 1.4  
-**🔖 Documentation Version:** 1.1
+**📅 Last Updated:** 2026-11-23  
+**📖 Current Version:** 1.5  
+**🔖 Documentation Version:** 1.2
