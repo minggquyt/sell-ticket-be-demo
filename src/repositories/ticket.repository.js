@@ -205,12 +205,20 @@ class TicketRepository {
     return result.rows.map((r) => Number(r.order_code)).filter((c) => Number.isInteger(c) && c > 0);
   }
 
-  async releaseExpiredSeats(confirmWindowSeconds = 30) {
+  async releaseExpiredSeats(confirmWindowSeconds = 30, holdGraceSeconds = 5) {
+    const safeConfirmWindow = Number(confirmWindowSeconds) || 30;
+    const safeHoldGrace = Math.max(0, Number(holdGraceSeconds) || 0);
     const result = await pool.query(
       `WITH target_seats AS (
          SELECT id, current_order_code
          FROM seats
-         WHERE status IN ('RESERVED', 'PAYMENT_PROCESSING') AND reserved_until < NOW()
+         WHERE (
+           status = 'RESERVED'
+           AND reserved_until + make_interval(secs => $2) < NOW()
+         ) OR (
+           status = 'PAYMENT_PROCESSING'
+           AND reserved_until < NOW()
+         )
          FOR UPDATE SKIP LOCKED
        ),
        released_seats AS (
@@ -243,7 +251,7 @@ class TicketRepository {
        SELECT
          COALESCE((SELECT json_agg(row_to_json(rs)) FROM released_seats rs), '[]'::json) AS released_seats,
          COALESCE((SELECT json_agg(eo.order_code) FROM expired_orders eo), '[]'::json) AS expired_order_codes;`,
-      [Number(confirmWindowSeconds) || 30]
+      [safeConfirmWindow, safeHoldGrace]
     );
     const row = result.rows[0] || {};
     const releasedSeats = Array.isArray(row.released_seats) ? row.released_seats : [];
@@ -399,22 +407,33 @@ class TicketRepository {
     return result.rows.map((r) => r.seat_id);
   }
 
-  async getHeldSeatIdsByUserId(userId, dbClient = pool) {
+  async getHeldSeatIdsByUserId(userId, dbClient = pool, allowedStatuses = ['RESERVED']) {
+    const statuses =
+      Array.isArray(allowedStatuses) && allowedStatuses.length > 0
+        ? allowedStatuses
+        : ['RESERVED'];
     const result = await dbClient.query(
-      `SELECT id FROM seats WHERE reserved_by = $1 AND status IN ('RESERVED', 'PAYMENT_PROCESSING');`,
-      [userId]
+      `SELECT id FROM seats WHERE reserved_by = $1 AND status::text = ANY($2::text[]);`,
+      [userId, statuses]
     );
     return result.rows.map((r) => r.id);
   }
 
-  async releaseSeatsByIds(effectiveSeatIds, userId = null, dbClient = pool) {
+  async releaseSeatsByIds(effectiveSeatIds, userId = null, dbClient = pool, allowedStatuses = ['RESERVED']) {
+    if (!Array.isArray(effectiveSeatIds) || effectiveSeatIds.length === 0) {
+      return [];
+    }
+    const statuses =
+      Array.isArray(allowedStatuses) && allowedStatuses.length > 0
+        ? allowedStatuses
+        : ['RESERVED'];
     const result = await dbClient.query(
       `WITH target_seats AS (
         SELECT id, current_order_code
         FROM seats
         WHERE id = ANY($1::uuid[])
           AND (reserved_by = $2 OR $2 IS NULL)
-          AND status IN ('RESERVED', 'PAYMENT_PROCESSING')
+          AND status::text = ANY($3::text[])
         FOR UPDATE
       )
       UPDATE seats s
@@ -422,18 +441,23 @@ class TicketRepository {
       FROM target_seats ts
       WHERE s.id = ts.id
       RETURNING s.id, s.seat_number, ts.current_order_code;`,
-      [effectiveSeatIds, userId || null]
+      [effectiveSeatIds, userId || null, statuses]
     );
     return result.rows;
   }
 
-  async cancelOrExpireProcessingOrders(orderCodes, dbClient = pool) {
+  async cancelOrExpireProcessingOrders(orderCodes, dbClient = pool, userId = null) {
+    if (!Array.isArray(orderCodes) || orderCodes.length === 0) {
+      return [];
+    }
     const result = await dbClient.query(
       `UPDATE orders
        SET status = CASE WHEN expires_at <= NOW() THEN 'EXPIRED'::order_status ELSE 'CANCELLED'::order_status END
-       WHERE order_code = ANY($1::bigint[]) AND status = 'PAYMENT_PROCESSING'
+       WHERE order_code = ANY($1::bigint[])
+         AND status = 'PAYMENT_PROCESSING'
+         AND (user_id = $2 OR $2 IS NULL)
        RETURNING order_code, status;`,
-      [orderCodes]
+      [orderCodes, userId || null]
     );
     return result.rows;
   }
