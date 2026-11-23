@@ -3,6 +3,7 @@ const ticketRepository = require('../repositories/ticket.repository');
 const logger = require('../utils/logger');
 const {
   SEAT_HOLD_DURATION_SECONDS,
+  SEAT_HOLD_CHECKOUT_GRACE_SECONDS,
   PAYMENT_TIMEOUT_SECONDS,
   PAYMENT_CONFIRM_WINDOW_SECONDS,
   PAYOS_SYNC_COOLDOWN_MS,
@@ -90,6 +91,7 @@ class TicketService {
   async releaseExpiredSeatsAndNotify() {
     const { releasedSeats, expiredOrderCodes } = await ticketRepository.releaseExpiredSeats(
       PAYMENT_CONFIRM_WINDOW_SECONDS,
+      SEAT_HOLD_CHECKOUT_GRACE_SECONDS,
     );
     if (Array.isArray(expiredOrderCodes) && expiredOrderCodes.length > 0) {
       for (const code of expiredOrderCodes) {
@@ -162,6 +164,7 @@ class TicketService {
           code: 'FULLY_RESERVED',
           reservedSeats: updatedSeats,
           reservedUntil,
+          serverTime: new Date().toISOString(),
         };
       }
 
@@ -228,6 +231,7 @@ class TicketService {
         code: 'PARTIAL_RESERVED_SUCCESS',
         reservedSeats: updateRows,
         reservedUntil,
+        serverTime: new Date().toISOString(),
       };
     } catch (err) {
       await ticketRepository.rollbackTransaction(client);
@@ -267,6 +271,7 @@ class TicketService {
         seats: rows,
         seatIds: rows.map(s => s.id),
         reserved_until: until,
+        serverTime: new Date().toISOString(),
         totalTickets: rows.length
       };
     } catch (err) {
@@ -279,54 +284,40 @@ class TicketService {
 
   // ==================== Release Seats & Cancel ====================
   async releaseReservedSeats(userId, seatIds, orderCode = null) {
+    if (orderCode !== null && orderCode !== undefined && orderCode !== '') {
+      const numericCode = Number(orderCode);
+      if (!Number.isInteger(numericCode) || numericCode <= 0) {
+        throw this.createHttpError(400, 'Mã đơn hàng không hợp lệ.');
+      }
+      const cancelled = await this.cancelOrder(userId, numericCode);
+      return (cancelled.releasedSeats || []).map((s) => ({
+        ...s,
+        current_order_code: numericCode,
+      }));
+    }
+
     const client = await ticketRepository.beginTransaction();
     let txClosed = false;
     try {
       let effectiveSeatIds = Array.isArray(seatIds) ? [...seatIds].filter(Boolean) : [];
 
-      if (orderCode) {
-        const numericCode = Number(orderCode);
-        if (Number.isInteger(numericCode) && numericCode > 0) {
-          const foundIds = await ticketRepository.getSeatIdsByOrderCode(numericCode, client);
-          effectiveSeatIds = [...new Set([...effectiveSeatIds, ...foundIds])];
-        }
-      }
-
       if (effectiveSeatIds.length === 0 && userId) {
-        const foundIds = await ticketRepository.getHeldSeatIdsByUserId(userId, client);
-        effectiveSeatIds = foundIds;
+        effectiveSeatIds = await ticketRepository.getHeldSeatIdsByUserId(userId, client, ['RESERVED']);
       }
 
-      const releasedRows = await ticketRepository.releaseSeatsByIds(effectiveSeatIds, userId, client);
-
-      const orderCodes = [...new Set(releasedRows.map((r) => r.current_order_code).filter(Boolean))];
-      if (orderCode) {
-        orderCodes.push(Number(orderCode));
-      }
-      const uniqueOrderCodes = [...new Set(orderCodes.filter(Boolean))];
-
-      let updatedOrders = [];
-      if (uniqueOrderCodes.length > 0) {
-        updatedOrders = await ticketRepository.cancelOrExpireProcessingOrders(uniqueOrderCodes, client);
-      }
+      const releasedRows = await ticketRepository.releaseSeatsByIds(
+        effectiveSeatIds,
+        userId,
+        client,
+        ['RESERVED'],
+      );
 
       await ticketRepository.commitTransaction(client);
       txClosed = true;
 
-      for (const code of uniqueOrderCodes) {
-        try {
-          await payos.paymentRequests.cancel(Number(code), 'User cancelled reservation');
-          logger.payment('CANCEL', `Đã hủy link PayOS cho đơn #${code}`);
-        } catch (cancelErr) {
-          logger.payment('WARN', `Không thể hủy link PayOS cho đơn #${code} (có thể đã hết hạn/hủy trước đó): ${cancelErr.message}`);
-        }
-      }
-
-      for (const ord of updatedOrders) {
-        await this.emitOrderStatusSnapshot(ord.order_code);
-      }
-
-      logger.release(`User ${userId} đã hủy/nhả ${releasedRows.length} ghế [${releasedRows.map((r) => r.seat_number).join(', ')}] về AVAILABLE`);
+      logger.release(
+        `User ${userId} đã hủy/nhả ${releasedRows.length} ghế [${releasedRows.map((r) => r.seat_number).join(', ')}] về AVAILABLE`,
+      );
 
       return releasedRows;
     } catch (err) {
@@ -432,6 +423,7 @@ class TicketService {
       }
 
       const now = new Date();
+      const holdGraceMs = SEAT_HOLD_CHECKOUT_GRACE_SECONDS * 1000;
       let total = 0;
 
       // FIX #1: Kiểm tra chặt chẽ ownership và status
@@ -442,7 +434,8 @@ class TicketService {
         if (seat.status !== 'RESERVED') {
           throw new Error(`Ghế ${seat.seat_number} đã được thanh toán hoặc không còn hợp lệ.`);
         }
-        if (new Date(seat.reserved_until) <= now) {
+        const reservedUntilMs = seat.reserved_until ? new Date(seat.reserved_until).getTime() : NaN;
+        if (!Number.isFinite(reservedUntilMs) || reservedUntilMs + holdGraceMs <= now.getTime()) {
           throw new Error(`Ghế ${seat.seat_number} đã hết hạn giữ chỗ.`);
         }
         total += Number(seat.price);

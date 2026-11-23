@@ -164,7 +164,7 @@ exports.releaseSeats = async (req, res) => {
     res.json(responseDto.toJSON());
   } catch (err) {
     const errorDto = new SeatErrorDTO(err.message);
-    res.status(400).json(errorDto.toJSON());
+    res.status(err.statusCode || 400).json(errorDto.toJSON());
   }
 };
 

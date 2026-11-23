@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const {
   SEAT_RELEASE_JOB_INTERVAL_MS,
   PAYMENT_CONFIRM_WINDOW_SECONDS,
+  SEAT_HOLD_CHECKOUT_GRACE_SECONDS,
 } = require('../config/constants');
 
 // Background Job: Quét ghế và đơn hàng hết hạn định kỳ
@@ -22,6 +23,7 @@ function startSeatReleaseJob() {
       // 2. Nhả ghế quá hạn và chuyển các đơn quá confirmUntil sang EXPIRED
       const { releasedSeats, expiredOrderCodes } = await ticketRepository.releaseExpiredSeats(
         PAYMENT_CONFIRM_WINDOW_SECONDS,
+        SEAT_HOLD_CHECKOUT_GRACE_SECONDS,
       );
 
       if (releasedSeats.length > 0) {

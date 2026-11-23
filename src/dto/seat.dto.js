@@ -177,6 +177,7 @@ class SeatHoldSuccessResponseDTO {
       code: result.code || 'FULLY_RESERVED',
       seatIds: result.reservedSeats.map(s => s.id),
       reserved_until: result.reservedUntil,
+      serverTime: result.serverTime || new Date().toISOString(),
       seats: result.reservedSeats.map(s => new SeatResponseDTO(s).toJSON())
     };
   }
@@ -235,6 +236,7 @@ class ZoneReserveSuccessResponseDTO {
       seats: result.seats.map(s => new SeatResponseDTO(s).toJSON()),
       seatIds: result.seatIds,
       reserved_until: result.reserved_until,
+      serverTime: result.serverTime || new Date().toISOString(),
       totalTickets: result.totalTickets
     };
   }
