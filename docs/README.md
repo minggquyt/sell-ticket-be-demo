@@ -29,6 +29,8 @@ docs/
 │   ├── CODE_REVIEW_FIXES.md     # Chi tiết đầy đủ 10 phát hiện
 │   ├── FIXES_SUMMARY.md         # Tóm tắt nhanh
 │   └── COMMIT_MESSAGE.txt       # Git commit message
+├── deploy/                      # 🆕 Heroku Deploy Audit & Operations
+│   └── HEROKU_DEPLOY_AUDIT.md   # Chuẩn hóa Heroku, Pool, CORS, Bulk Seats & Shutdown
 ├── migrations/                  # Database Migrations
 │   ├── README.md                # Migration guide
 │   ├── add_performance_indexes.sql
@@ -62,6 +64,12 @@ docs/
 | **Seat Booking** | [seat-booking.md](./api/seat-booking.md) | Giữ ghế, xác nhận partial, hủy giữ chỗ |
 | **Orders & Payment** | [orders-payment.md](./api/orders-payment.md) | Lịch sử, QR PayOS, trạng thái, SSE, hủy order và webhook |
 | **Admin** | [admin.md](./api/admin.md) | Ticket, refund, tạo/cập nhật/xóa sự kiện (ADMIN only) |
+
+### Deploy & Operations (🆕 Heroku `sell-ticket-be-bcn`)
+
+| Topic | File | Description |
+|-------|------|-------------|
+| **Heroku Deploy Audit** | [deploy/HEROKU_DEPLOY_AUDIT.md](./deploy/HEROKU_DEPLOY_AUDIT.md) | `Procfile`, DB pool, CORS `Retry-After`, CTE/UNNEST bulk seats, bảo mật `/logs`, `/api/health` & `SIGTERM` |
 
 ### Version History
 
@@ -103,6 +111,7 @@ stream are not JSON API responses.
 ### Public Endpoints (Không cần authentication)
 
 ```
+GET  /api/health                 # Health check kết nối DB & uptime
 GET  /api/events                 # Lấy danh sách sự kiện
 GET  /api/events/:eventId/details # Xem ghế/zone (?type=ZONE_BASED)
 GET  /api/payos-webhook          # Health check webhook
