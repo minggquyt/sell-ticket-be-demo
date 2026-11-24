@@ -362,7 +362,9 @@ class AuthService {
     }
 
     await authRepository.updateBankAndClearErrors(userId, input);
-    logger.auth('UPDATE_BANK', current.email, true, `${input.bankShortName} - ${input.bankAccountNo}`);
+    const rawAccNo = String(input.bankAccountNo || '');
+    const maskedAccNo = rawAccNo.length > 4 ? `***${rawAccNo.slice(-4)}` : '****';
+    logger.auth('UPDATE_BANK', current.email, true, `${input.bankShortName} - ${maskedAccNo}`);
     return this.getBankProfile(userId);
   }
 }

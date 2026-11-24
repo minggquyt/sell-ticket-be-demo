@@ -152,12 +152,16 @@ class AuthRepository {
 
   async markRegistrationExpired(registrationId, dbClient) {
     await dbClient.query(
-      `UPDATE public.pending_registrations
-       SET status = 'EXPIRED', updated_at = now()
-       WHERE id = $1::uuid AND status = 'PENDING';
+      `WITH expired AS (
+         UPDATE public.pending_registrations
+         SET status = 'EXPIRED', updated_at = now()
+         WHERE id = $1::uuid AND status = 'PENDING'
+         RETURNING id
+       )
        UPDATE public.registration_otps
        SET status = 'EXPIRED'
-       WHERE registration_id = $1 AND status = 'PENDING';`,
+       WHERE registration_id IN (SELECT id FROM expired)
+         AND status = 'PENDING';`,
       [registrationId]
     );
   }

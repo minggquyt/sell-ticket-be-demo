@@ -977,29 +977,9 @@ class TicketService {
         client
       );
 
-      if (event_type === 'SEAT_BASED') {
-        const rowsCount = Number(seatConfig?.rowsCount) || 1;
-        const seatsPerRow =
-          Number(seatConfig?.seatsPerRow) ||
-          Math.ceil((Number(seatConfig?.totalSeats) || 12) / rowsCount);
-        const price = Number(seatConfig?.price) || 200000;
-
-        for (let r = 0; r < rowsCount; r++) {
-          const rowLetter = String.fromCharCode(65 + r);
-          for (let s = 1; s <= seatsPerRow; s++) {
-            await ticketRepository.createSeat(event.id, `${rowLetter}${s}`, 'STANDARD', price, client);
-          }
-        }
-      } else {
-        for (const z of (zoneConfigs || [])) {
-          const count = Number(z.count) || 10;
-          const price = Number(z.price) || 200000;
-          const zoneName = (z.zoneName || 'STANDARD').toUpperCase();
-
-          for (let i = 1; i <= count; i++) {
-            await ticketRepository.createSeat(event.id, `${zoneName}-${String(i).padStart(2, '0')}`, zoneName, price, client);
-          }
-        }
+      const seatsToCreate = this._buildEventSeats(event.id, event_type, seatConfig, zoneConfigs);
+      if (seatsToCreate.length > 0) {
+        await ticketRepository.createSeatsBulk(seatsToCreate, client);
       }
 
       await ticketRepository.commitTransaction(client);
@@ -1067,28 +1047,10 @@ class TicketService {
       if (!hasSoldOrHeld) {
         await ticketRepository.deleteSeatsByEventId(eventId, client);
 
-        if (event_type === 'SEAT_BASED' && seatConfig) {
-          const rowsCount = Number(seatConfig.rowsCount) || 1;
-          const seatsPerRow =
-            Number(seatConfig.seatsPerRow) ||
-            Math.ceil((Number(seatConfig.totalSeats) || 12) / rowsCount);
-          const price = Number(seatConfig.price) || 200000;
-
-          for (let r = 0; r < rowsCount; r++) {
-            const rowLetter = String.fromCharCode(65 + r);
-            for (let s = 1; s <= seatsPerRow; s++) {
-              await ticketRepository.createSeat(eventId, `${rowLetter}${s}`, 'STANDARD', price, client);
-            }
-          }
-        } else if (event_type === 'ZONE_BASED' && Array.isArray(zoneConfigs)) {
-          for (const z of zoneConfigs) {
-            const count = Number(z.count) || 10;
-            const price = Number(z.price) || 200000;
-            const zoneName = (z.zoneName || 'STANDARD').toUpperCase();
-
-            for (let i = 1; i <= count; i++) {
-              await ticketRepository.createSeat(eventId, `${zoneName}-${String(i).padStart(2, '0')}`, zoneName, price, client);
-            }
+        if ((event_type === 'SEAT_BASED' && seatConfig) || (event_type === 'ZONE_BASED' && Array.isArray(zoneConfigs))) {
+          const seatsToCreate = this._buildEventSeats(eventId, event_type, seatConfig, zoneConfigs);
+          if (seatsToCreate.length > 0) {
+            await ticketRepository.createSeatsBulk(seatsToCreate, client);
           }
         }
       } else {
@@ -1109,6 +1071,46 @@ class TicketService {
       await ticketRepository.rollbackTransaction(client);
       throw err;
     }
+  }
+
+  _buildEventSeats(eventId, eventType, seatConfig, zoneConfigs) {
+    const seats = [];
+    if (eventType === 'SEAT_BASED') {
+      const rowsCount = Number(seatConfig?.rowsCount) || 1;
+      const seatsPerRow =
+        Number(seatConfig?.seatsPerRow) ||
+        Math.ceil((Number(seatConfig?.totalSeats) || 12) / rowsCount);
+      const price = Number(seatConfig?.price) || 200000;
+
+      for (let r = 0; r < rowsCount; r++) {
+        const rowLetter = String.fromCharCode(65 + r);
+        for (let s = 1; s <= seatsPerRow; s++) {
+          seats.push({
+            eventId,
+            seatNumber: `${rowLetter}${s}`,
+            zoneName: 'STANDARD',
+            price,
+          });
+        }
+      }
+      return seats;
+    }
+
+    for (const z of (zoneConfigs || [])) {
+      const count = Number(z.count) || 10;
+      const price = Number(z.price) || 200000;
+      const zoneName = (z.zoneName || 'STANDARD').toUpperCase();
+
+      for (let i = 1; i <= count; i++) {
+        seats.push({
+          eventId,
+          seatNumber: `${zoneName}-${String(i).padStart(2, '0')}`,
+          zoneName,
+          price,
+        });
+      }
+    }
+    return seats;
   }
 
   async deleteEvent(eventId) {

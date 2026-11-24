@@ -1,4 +1,13 @@
 const buckets = new Map();
+const PRUNE_THRESHOLD = 1000;
+
+function pruneExpiredBuckets(now) {
+  for (const [key, bucket] of buckets.entries()) {
+    if (!bucket || bucket.resetAt <= now) {
+      buckets.delete(key);
+    }
+  }
+}
 
 function createOtpRateLimit({ windowMs, max, keyPrefix }) {
   return (req, res, next) => {
@@ -21,6 +30,9 @@ function createOtpRateLimit({ windowMs, max, keyPrefix }) {
         data: { code: 'RATE_LIMITED' },
       });
     }
+    if (buckets.size >= PRUNE_THRESHOLD) {
+      pruneExpiredBuckets(now);
+    }
     for (const key of keys) {
       const current = buckets.get(key);
       if (!current || current.resetAt <= now) {
@@ -33,4 +45,8 @@ function createOtpRateLimit({ windowMs, max, keyPrefix }) {
   };
 }
 
-module.exports = { createOtpRateLimit };
+module.exports = {
+  createOtpRateLimit,
+  _getBucketCount: () => buckets.size,
+  _clearBuckets: () => buckets.clear(),
+};
