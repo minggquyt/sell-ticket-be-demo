@@ -24,10 +24,17 @@ module.exports = {
   OTP_RESEND_COOLDOWN_SECONDS: positiveInt(process.env.OTP_RESEND_COOLDOWN_SECONDS, 60),
   OTP_MAX_ATTEMPTS: positiveInt(process.env.OTP_MAX_ATTEMPTS, 5),
   OTP_MAX_RESENDS: positiveInt(process.env.OTP_MAX_RESENDS, 3),
-  EMAIL_PROVIDER: String(process.env.EMAIL_PROVIDER || 'resend').toLowerCase(),
+  EMAIL_PROVIDER: String(process.env.EMAIL_PROVIDER || 'gmail').toLowerCase(),
   EMAIL_FROM: process.env.EMAIL_FROM || '',
   GMAIL_USER: process.env.GMAIL_USER || '',
   GMAIL_APP_PASSWORD: process.env.GMAIL_APP_PASSWORD || '',
+  DB_POOL_MAX: positiveInt(process.env.DB_POOL_MAX, 15),
+  CORS_ORIGINS: process.env.CORS_ORIGINS || '',
+  ENABLE_LIVE_LOGS:
+    process.env.ENABLE_LIVE_LOGS !== undefined
+      ? process.env.ENABLE_LIVE_LOGS === 'true'
+      : process.env.NODE_ENV !== 'production',
+  LOGS_ACCESS_TOKEN: process.env.LOGS_ACCESS_TOKEN || '',
   
   // FIX #9: Magic numbers -> Named constants
   SEAT_HOLD_DURATION_SECONDS: 30,

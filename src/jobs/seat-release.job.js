@@ -12,7 +12,7 @@ const {
 function startSeatReleaseJob() {
   let isRunning = false;
 
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     if (isRunning) return;
     isRunning = true;
 
@@ -67,6 +67,9 @@ function startSeatReleaseJob() {
       isRunning = false;
     }
   }, SEAT_RELEASE_JOB_INTERVAL_MS);
+
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 module.exports = { startSeatReleaseJob };

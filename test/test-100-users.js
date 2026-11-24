@@ -1,4 +1,4 @@
-const BASE_URL = 'http://localhost:3000/api';
+const BASE_URL = (process.env.BASE_URL || 'http://localhost:3000/api').replace(/\/$/, '');
 const TOTAL_USERS = 100;
 
 // Helper: Tính toán thống kê hiệu năng (Min, Max, Avg) từ mảng độ trễ (ms)

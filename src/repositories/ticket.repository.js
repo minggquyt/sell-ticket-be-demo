@@ -800,6 +800,37 @@ class TicketRepository {
     );
   }
 
+  /**
+   * Chèn hàng loạt ghế trong đúng 1 round-trip SQL bằng UNNEST.
+   * @param {Array<{ eventId: string, seatNumber: string, zoneName: string, price: number }>} seats
+   * @param {object} [dbClient=pool]
+   * @returns {Promise<number>} Số dòng đã chèn
+   */
+  async createSeatsBulk(seats, dbClient = pool) {
+    if (!Array.isArray(seats) || seats.length === 0) return 0;
+
+    const eventIds = [];
+    const seatNumbers = [];
+    const zoneNames = [];
+    const prices = [];
+
+    for (const s of seats) {
+      eventIds.push(s.eventId);
+      seatNumbers.push(s.seatNumber);
+      zoneNames.push(s.zoneName);
+      prices.push(s.price);
+    }
+
+    const result = await dbClient.query(
+      `INSERT INTO seats (event_id, seat_number, zone_name, price, status)
+       SELECT event_id, seat_number, zone_name, price, 'AVAILABLE'
+       FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::numeric[])
+         AS t(event_id, seat_number, zone_name, price);`,
+      [eventIds, seatNumbers, zoneNames, prices]
+    );
+    return result.rowCount || 0;
+  }
+
   async countUnavailableSeatsByEvent(eventId, dbClient = pool) {
     const result = await dbClient.query(
       `SELECT COUNT(*) FROM seats WHERE event_id = $1 AND status != 'AVAILABLE';`,

@@ -15,10 +15,21 @@ if (!clientId || !apiKey || !checksumKey) {
     paymentRequests: {
       create: async () => {
         throw new Error('PayOS not configured. Please add credentials to .env file.');
+      },
+      get: async () => {
+        throw new Error('PayOS not configured. Please add credentials to .env file.');
+      },
+      cancel: async () => {
+        throw new Error('PayOS not configured. Please add credentials to .env file.');
       }
     },
     webhooks: {
-      verify: async (data) => data
+      verify: async (data) => {
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error('PayOS webhook verification unavailable: missing credentials.');
+        }
+        return data;
+      }
     }
   };
 } else {

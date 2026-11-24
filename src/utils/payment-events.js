@@ -159,6 +159,16 @@ class PaymentEventHub {
   getSubscriberCount(orderCode) {
     return this.subscribersByOrder.get(Number(orderCode))?.size || 0;
   }
+
+  closeAll() {
+    for (const set of this.subscribersByOrder.values()) {
+      for (const entry of [...set]) {
+        entry.cleanup();
+        safeEnd(entry.res);
+      }
+    }
+    this.subscribersByOrder.clear();
+  }
 }
 
 const paymentEvents = new PaymentEventHub();

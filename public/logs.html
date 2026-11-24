@@ -355,7 +355,7 @@
           <span class="w-dot w-yellow"></span>
           <span class="w-dot w-green"></span>
         </div>
-        <div>bash - live-stream@sell-ticket-be-demo</div>
+        <div>bash - live-stream@sell-ticket-be</div>
         <div id="logStats">0 dòng</div>
       </div>
       <ul id="logList">
@@ -365,7 +365,7 @@
   </main>
 
   <footer>
-    <div>Server: <a href="https://sell-ticket-be-demo.onrender.com" target="_blank" style="color:#38bdf8; text-decoration:none;">https://sell-ticket-be-demo.onrender.com</a></div>
+    <div>Server: <a id="serverOriginLink" href="https://sell-ticket-be-bcn-bcc127d1b2cd.herokuapp.com" target="_blank" rel="noopener noreferrer" style="color:#38bdf8; text-decoration:none;">https://sell-ticket-be-bcn-bcc127d1b2cd.herokuapp.com</a></div>
     <div>Cập nhật thời gian thực qua Server-Sent Events (SSE)</div>
   </footer>
 
@@ -380,12 +380,27 @@
       ALL: 0, HTTP: 0, HOLD: 0, PAYMENT: 0, RELEASE: 0, CRON: 0, ERROR: 0
     };
 
+    function updateServerOriginLink() {
+      const originLink = document.getElementById('serverOriginLink');
+      if (!originLink) return;
+      const origin =
+        window.location.origin && window.location.origin !== 'null'
+          ? window.location.origin
+          : 'https://sell-ticket-be-bcn-bcc127d1b2cd.herokuapp.com';
+      originLink.href = origin;
+      originLink.textContent = origin;
+    }
+
     function connectSSE() {
       const statusBadge = document.getElementById('statusBadge');
       const statusText = document.getElementById('statusText');
 
-      // Tự động nhận URL server (chạy trực tiếp trên backend hoặc local)
-      const streamUrl = window.location.origin + '/api/logs/stream';
+      // Tự động nhận URL server (chạy trực tiếp trên backend hoặc local) và giữ lại token nếu có
+      const token = new URLSearchParams(window.location.search).get('token');
+      const streamUrl =
+        window.location.origin +
+        '/api/logs/stream' +
+        (token ? `?token=${encodeURIComponent(token)}` : '');
       eventSource = new EventSource(streamUrl);
 
       eventSource.onopen = () => {
@@ -544,6 +559,7 @@
     }
 
     // Bắt đầu kết nối khi trang tải xong
+    updateServerOriginLink();
     connectSSE();
   </script>
 </body>

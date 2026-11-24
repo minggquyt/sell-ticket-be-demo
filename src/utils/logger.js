@@ -15,11 +15,18 @@ const colors = {
   gray: '\x1b[90m'
 };
 
+const vnTimeFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Ho_Chi_Minh',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
 function getTimestamp() {
   const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
   const padMs = (n) => String(n).padStart(3, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${padMs(d.getMilliseconds())}`;
+  return `${vnTimeFormatter.format(d)}.${padMs(d.getMilliseconds())}`;
 }
 
 const { MAX_RECENT_LOGS, SSE_CLIENT_TIMEOUT_MS } = require('../config/constants');
@@ -68,6 +75,26 @@ const logger = {
 
   removeSSEClient(res) {
     sseClients.delete(res);
+  },
+
+  touchSSEClient(res) {
+    if (sseClients.has(res)) {
+      sseClients.set(res, Date.now());
+    }
+  },
+
+  closeAllSSEClients() {
+    for (const client of [...sseClients.keys()]) {
+      sseClients.delete(client);
+      try {
+        if (!client.writableEnded && !client.destroyed) {
+          client.end();
+        }
+      } catch {
+        // Ignore close errors during shutdown
+      }
+    }
+    sseClients.clear();
   },
 
   getRecentLogs() {

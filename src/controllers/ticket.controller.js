@@ -380,7 +380,9 @@ exports.getAdminTickets = async (req, res) => {
         customerEmail: o.customer_email || '',
         seatNumber: seatNums.join(', '),
         ticketType,
-        purchaseDate: o.created_at ? new Date(o.created_at).toLocaleString('vi-VN') : '',
+        purchaseDate: o.created_at
+          ? new Date(o.created_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
+          : '',
         price: Number(o.total_amount) || 0,
         status: statusMap[o.order_status] || 'paid',
         orderStatus: o.order_status,
